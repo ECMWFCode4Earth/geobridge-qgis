@@ -34,8 +34,9 @@ echo
 # Bandit scan from flagging every `assert` in the test files as B101.
 # build_plugin.sh itself is excluded too: it's a dev-only packaging tool,
 # never run by QGIS, and a .sh file inside the plugin trips the plugin
-# repo's "suspicious file type" scan.
-EXCLUDES=( "__pycache__" "*.pyc" ".git" ".claude" "quickstart.py" "*.zip" "build" "dist" ".pytest_cache" "test" "build_plugin.sh" )
+# repo's "suspicious file type" scan (which also flags hidden files, hence
+# .gitignore below — it's dev-only and QGIS never reads it at runtime).
+EXCLUDES=( "__pycache__" "*.pyc" ".git" ".gitignore" ".claude" "quickstart.py" "*.zip" "build" "dist" ".pytest_cache" "test" "build_plugin.sh" )
 
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
