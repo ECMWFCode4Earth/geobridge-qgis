@@ -36,7 +36,12 @@ echo
 # never run by QGIS, and a .sh file inside the plugin trips the plugin
 # repo's "suspicious file type" scan (which also flags hidden files, hence
 # .gitignore below — it's dev-only and QGIS never reads it at runtime).
-EXCLUDES=( "__pycache__" "*.pyc" ".git" ".gitignore" ".claude" "quickstart.py" "*.zip" "build" "dist" ".pytest_cache" "test" "build_plugin.sh" )
+# docs/ and .readthedocs.yaml are the Sphinx/Read the Docs source — built
+# and hosted separately at readthedocs.org, not needed inside QGIS.
+EXCLUDES=(
+    "__pycache__" "*.pyc" ".git" ".gitignore" ".claude" "quickstart.py" "*.zip"
+    "build" "dist" ".pytest_cache" "test" "build_plugin.sh" "docs" ".readthedocs.yaml"
+)
 
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT

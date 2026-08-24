@@ -10,6 +10,13 @@ time-stepped WMTS layer directly on the map — with a play/pause slider to scru
 This plugin is a thin wrapper. All discovery, semantic search, and WMTS URL logic lives in
 `geobridge`; nothing is reimplemented here.
 
+## Documentation
+
+Full docs (installation, and a walkthrough of each tab with screenshots) are built with
+Sphinx from the `docs/` folder — see `docs/index.rst` to read the source directly, or
+connect this repo at [readthedocs.org](https://readthedocs.org) to publish it at
+`https://geobridge-qgis.readthedocs.io`.
+
 ## Status
 
 v1 (this release): API key tab + Search/WMTS-viewer tab. GeoTIFF export

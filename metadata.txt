@@ -2,7 +2,7 @@
 name=GeoBridge
 qgisMinimumVersion=3.28
 description=Discover, semantically search, and preview Copernicus climate data (ERA5, CAMS, CEMS) as WMTS layers directly in QGIS, powered by the geobridge Python library.
-version=0.1.7
+version=0.1.8
 author=GeoBridge contributors
 email=iliasmachairas@outlook.com
 
@@ -14,7 +14,8 @@ repository=https://github.com/ECMWFCode4Earth/geobridge-qgis
 tracker=https://github.com/ECMWFCode4Earth/geobridge-qgis/issues
 
 hasProcessingProvider=no
-changelog=0.1.7 Fix area-of-interest bleed-through between the Search tab and Browse-by-Variable tab: they shared a single bbox, so drawing/selecting an area in one tab silently overwrote what the other tab would export/download. Each tab now keeps its own independent area of interest.
+changelog=0.1.8 Add Sphinx documentation (docs/, ready for Read the Docs) covering installation and each tab, with screenshots. Docs source is excluded from the shipped plugin zip, same as build_plugin.sh and test/.
+    0.1.7 Fix area-of-interest bleed-through between the Search tab and Browse-by-Variable tab: they shared a single bbox, so drawing/selecting an area in one tab silently overwrote what the other tab would export/download. Each tab now keeps its own independent area of interest.
     0.1.6 Fix "No module named 'netCDF4'" when exporting/downloading CDS-API-path datasets not in the ARCO Zarr lake (e.g. ERA5-Land via the Browse tab): netcdf4 is now installed alongside geobridge[zarr], and the dependency-availability check catches its absence instead of reporting everything as installed.
     0.1.5 Silence harmless "AttributeError: 'NoneType' object has no attribute 'write'" log spam from numpy/scikit-learn (a geobridge dependency) writing deprecation notices to sys.stderr, which QGIS leaves as None until its Python Console has been opened once.
     0.1.4 Qt6 compatibility: fully qualified 33 unscoped enum references (Qt.AlignLeft -> Qt.AlignmentFlag.AlignLeft, QMessageBox.Yes -> QMessageBox.StandardButton.Yes, etc.) across timeseries_task.py, export_task.py, ts_plot_widget.py, browse_tab.py, geobridge_plugin_dialog.py.

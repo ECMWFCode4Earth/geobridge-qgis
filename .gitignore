@@ -15,6 +15,7 @@ quickstart.py
 *.zip
 build/
 dist/
+docs/_build/
 
 # OS
 .DS_Store
