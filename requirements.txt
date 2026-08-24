@@ -1,0 +1,9 @@
+# Documentation only. QGIS does NOT read this file automatically — nothing here
+# is auto-installed. Runtime dependencies are installed from inside the plugin
+# itself (Tab 1's "Install dependencies" button), which runs
+# `sys.executable -m pip install geobridge` into QGIS's own Python interpreter.
+#
+# Listed here purely so a human (or an external CI job testing gb_wrapper.py /
+# time_utils.py with plain pytest) knows what's needed:
+geobridge>=0.1.8
+pyyaml

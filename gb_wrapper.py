@@ -1,0 +1,656 @@
+# -*- coding: utf-8 -*-
+"""
+gb_wrapper
+~~~~~~~~~~
+
+The single point of contact between this plugin and the `geobridge` library.
+
+No PyQt / qgis imports anywhere in this file, and no `import geobridge` at
+module scope: if `geobridge` isn't installed yet, QGIS must still be able to
+import this plugin package cleanly (otherwise QGIS disables the plugin with
+a red error icon before the user ever sees the "Install dependencies"
+button in Tab 1). Every function below imports `geobridge` internally and
+converts a missing install into `GeobridgeNotInstalled` instead of letting
+an `ImportError` propagate from an unexpected place.
+
+Map layers are always built through `geobridge.wmts_layer(...).to_qgis()`
+(the XYZ-tile approach) — never through `LayerDescriptor.to_qgis()`
+directly, which builds a WMS-provider URI that QGIS cannot reliably parse
+against ECMWF's WMTS server (see `geobridge/modules/wmts.py`'s module
+docstring in the main GeoBridge repo).
+"""
+
+from __future__ import annotations
+
+from typing import Any, Callable, Optional
+
+
+class GeobridgeNotInstalled(RuntimeError):
+    """Raised when `geobridge` (or an optional extra) isn't importable yet."""
+
+
+# ---------------------------------------------------------------------------
+# Availability checks
+# ---------------------------------------------------------------------------
+
+def is_core_available() -> bool:
+    """True once `import geobridge` succeeds (pulls in only pyyaml)."""
+    try:
+        import geobridge  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def is_zarr_extra_available() -> bool:
+    """True once the heavy `geobridge[zarr]` deps are importable.
+
+    Needed only for Phase 2 (zarr_to_geotiff / cds_to_geotiff / fuse).
+
+    Also checks `aiohttp`/`requests` even though they aren't part of
+    `geobridge[zarr]` itself: published geobridge[zarr] on PyPI declares
+    plain "fsspec" rather than "fsspec[http]", so fsspec's HTTPFileSystem
+    (used to open the ARCO Zarr stores over https://) silently lacks them
+    otherwise. Without this check, a QGIS install that already has the six
+    core zarr-tier packages but not aiohttp/requests reports as "fully
+    installed" and hides the only button that would fix it — see
+    `_on_install_core_clicked` in geobridge_plugin_dialog.py, which
+    installs all three together for exactly this reason.
+    """
+    try:
+        import dask  # noqa: F401
+        import fsspec  # noqa: F401
+        import rasterio  # noqa: F401
+        import rioxarray  # noqa: F401
+        import xarray  # noqa: F401
+        import zarr  # noqa: F401
+        import aiohttp  # noqa: F401
+        import requests  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def geobridge_version() -> Optional[str]:
+    """Return the installed geobridge version, or None if not installed."""
+    try:
+        import geobridge
+    except ImportError:
+        return None
+    return geobridge.__version__
+
+
+# ---------------------------------------------------------------------------
+# Authentication
+# ---------------------------------------------------------------------------
+
+def authenticate(key: Optional[str]) -> None:
+    """Initialise a geobridge CDS API session for this process.
+
+    Raises
+    ------
+    GeobridgeNotInstalled
+        If geobridge isn't installed yet.
+    geobridge.AuthenticationError
+        If the key is empty/invalid and no other credential source exists.
+    """
+    try:
+        import geobridge as gb
+    except ImportError as exc:
+        raise GeobridgeNotInstalled(str(exc)) from exc
+    gb.authenticate(key=key or None)
+
+
+def is_authenticated() -> bool:
+    """True if authenticate() has succeeded in this process."""
+    try:
+        import geobridge as gb
+    except ImportError:
+        return False
+    return gb.is_authenticated()
+
+
+# ---------------------------------------------------------------------------
+# Discovery / semantic search
+# ---------------------------------------------------------------------------
+
+def semantic_search(query: str, max_results: int = 15, min_confidence: float = 0.1) -> list:
+    """Return a list of geobridge.SemanticMatch, unsorted (caller sorts)."""
+    try:
+        import geobridge as gb
+    except ImportError as exc:
+        raise GeobridgeNotInstalled(str(exc)) from exc
+    return gb.semantic_search(query, max_results=max_results, min_confidence=min_confidence)
+
+
+def discover_one(dataset_id: str):
+    """Return a geobridge.LayerDescriptor for dataset_id, or None."""
+    try:
+        import geobridge as gb
+    except ImportError as exc:
+        raise GeobridgeNotInstalled(str(exc)) from exc
+    return gb.discover_one(dataset_id)
+
+
+def discover_all(keyword: Optional[str] = None) -> list:
+    """Return the list of geobridge LayerDescriptors in the catalogue.
+
+    Used to populate the dataset dropdown on the Browse-by-Variable tab.
+    Reads the locally bundled catalogue snapshot — no network call.
+    """
+    try:
+        import geobridge as gb
+    except ImportError as exc:
+        raise GeobridgeNotInstalled(str(exc)) from exc
+    return gb.discover(keyword=keyword) if keyword else gb.discover()
+
+
+# ---------------------------------------------------------------------------
+# CDS form / constraints — powers the "Browse by Variable" tab.
+#
+# Two separate data sources with different jobs:
+#
+#   * gb.fetch_form(ds)        — the display schema: one widget per CDS
+#     parameter with its {value,label} pairs. Used for LABELS and for the
+#     handful of parameters that have no constraints entry.
+#   * gb.fetch_constraints(ds) — the list of jointly-valid combinations.
+#     This is the source of truth for *what is actually selectable*, and it
+#     is what drives the grey-out cascade.
+#
+# IMPORTANT (learned the hard way against real datasets): for ERA5 the form's
+# `variable` widget is a grouped `StringListArrayWidget` whose values the
+# geobridge form parser does NOT unpack, so `FormSchema.variables()` comes
+# back EMPTY. The variable list must therefore be derived from the
+# constraints, not the form — which `available_values(ds, "variable", {})`
+# does. Never populate the variable dropdown straight from fetch_form().
+# ---------------------------------------------------------------------------
+
+def get_form(dataset_id: str):
+    """Return the geobridge FormSchema for dataset_id, or None.
+
+    Used only for display labels and for parameters absent from the
+    constraints. For *which values are valid*, use available_values().
+    """
+    try:
+        import geobridge as gb
+    except ImportError as exc:
+        raise GeobridgeNotInstalled(str(exc)) from exc
+    return gb.fetch_form(dataset_id)
+
+
+def get_constraints(dataset_id: str) -> list:
+    """Return the raw list of valid-combination dicts for dataset_id.
+
+    Each dict maps a CDS parameter name to a list of values; the whole
+    dict is valid only if every parameter is satisfied jointly. Returns an
+    empty list if the dataset has no constraints file.
+    """
+    try:
+        import geobridge as gb
+    except ImportError as exc:
+        raise GeobridgeNotInstalled(str(exc)) from exc
+    return gb.fetch_constraints(dataset_id)
+
+
+def validate_request(dataset_id: str, request: dict) -> list:
+    """Return a list of human-readable problems with a CDS request, or [].
+
+    Wraps geobridge.validate_request — checks the request's values against
+    the form's allowed enums and the constraints' valid combinations. An
+    empty list means the request looks submittable.
+    """
+    try:
+        import geobridge as gb
+    except ImportError as exc:
+        raise GeobridgeNotInstalled(str(exc)) from exc
+    return gb.validate_request(dataset_id, request)
+
+
+def value_labels(dataset_id: str, param: str) -> dict:
+    """Return a {value: display_label} map for one parameter from the form.
+
+    Best-effort: returns {} when the form is unavailable or the parameter's
+    widget carries no labels (e.g. ERA5's grouped variable widget). Callers
+    should fall back to showing the raw value when a label is missing.
+    """
+    schema = get_form(dataset_id)
+    if schema is None:
+        return {}
+    widget = schema.get_widget(param)
+    if widget is None:
+        return {}
+    return widget.label_map
+
+
+def available_values_from_constraints(
+    constraints: list,
+    param: str,
+    fixed: Optional[dict] = None,
+) -> set:
+    """Return the set of still-valid values for *param*, given *fixed*.
+
+    Pure function (no network, no geobridge import) so it can be unit
+    tested against captured constraint fixtures — this is the core of the
+    grey-out cascade.
+
+    A combo is *compatible* with the current selection when, for every
+    already-chosen parameter in `fixed`, the combo either does not mention
+    that parameter (unconstrained) or lists the chosen value among its
+    allowed values. The available set for `param` is then the union of
+    `param`'s values across all compatible combos.
+
+    Parameters
+    ----------
+    constraints : list[dict]
+        As returned by :func:`get_constraints`.
+    param : str
+        The parameter whose selectable values we want (e.g. "day").
+    fixed : dict, optional
+        The user's current selections, {param: value or [values]}. The
+        entry for `param` itself is ignored, so a widget never constrains
+        its own option list.
+
+    Notes
+    -----
+    Compatibility uses set intersection, so a single-value cascade (one
+    year, one month, ...) and a multi-select both work: a combo counts as
+    compatible if it permits *at least one* chosen value for each fixed
+    parameter.
+    """
+    fixed = fixed or {}
+    # Normalise each fixed selection to a non-empty set of strings.
+    fixed_sets = {
+        k: ({v} if isinstance(v, str) else set(v))
+        for k, v in fixed.items()
+        if k != param and v
+    }
+
+    available: set = set()
+    for combo in constraints:
+        for key, chosen in fixed_sets.items():
+            allowed = combo.get(key)
+            if allowed is not None and not (chosen & set(allowed)):
+                break  # this combo rules out the current selection
+        else:
+            values = combo.get(param)
+            if values:
+                available.update(values)
+    return available
+
+
+def available_values(
+    dataset_id: str,
+    param: str,
+    fixed: Optional[dict] = None,
+) -> set:
+    """Fetch constraints for dataset_id and return valid values for *param*.
+
+    Thin fetching wrapper around
+    :func:`available_values_from_constraints`. Call with
+    ``param="variable", fixed={}`` to get the full variable list (the
+    correct source for the variable dropdown — see the module note above).
+    """
+    constraints = get_constraints(dataset_id)
+    return available_values_from_constraints(constraints, param, fixed)
+
+
+def field_states_from_constraints(
+    constraints: list,
+    fields,
+    selection: Optional[dict] = None,
+) -> dict:
+    """Return, for each field, an ordered {value: enabled} map for the cascade.
+
+    Pure function (no network) — the direct driver of the grey-out UI.
+
+    For every field:
+
+    * its *universe* (all values that ever appear, ignoring the current
+      selection) is what the widget displays, so greyed options stay
+      visible rather than disappearing; and
+    * a value is *enabled* iff it is still valid given the selections made
+      in the OTHER fields — i.e. it appears in
+      :func:`available_values_from_constraints` for that field. A field
+      never disables its own currently-chosen value.
+
+    Parameters
+    ----------
+    constraints : list[dict]
+        As returned by :func:`get_constraints`.
+    fields : iterable[str]
+        Parameter names to compute, e.g. ("product_type", "variable",
+        "year", "month", "day", "time").
+    selection : dict, optional
+        Current user choices, {param: value or [values]}.
+
+    Returns
+    -------
+    dict[str, dict[str, bool]]
+        {field: {value: enabled}}, values sorted, ready to paint onto a
+        list/combo where enabled=False means "grey it out".
+    """
+    selection = selection or {}
+    states: dict = {}
+    for field in fields:
+        universe = available_values_from_constraints(constraints, field, {})
+        enabled = available_values_from_constraints(constraints, field, selection)
+        states[field] = {v: (v in enabled) for v in sorted(universe)}
+    return states
+
+
+def form_universes(dataset_id: str, fields) -> dict:
+    """Return {field: [values]} taken from the form's enum widgets.
+
+    Fallback source of options for datasets that ship *no* constraints
+    (e.g. derived-utci-historical-timeseries), whose variable list lives
+    only in the form. Only fields whose widget carries a flat value list
+    are included; grouped widgets (ERA5's variable) yield nothing here and
+    are covered by the constraints instead.
+    """
+    schema = get_form(dataset_id)
+    if schema is None:
+        return {}
+    result = {}
+    for field in fields:
+        widget = schema.get_widget(field)
+        if widget is not None and widget.value_list:
+            result[field] = list(widget.value_list)
+    return result
+
+
+def field_states_from_sources(
+    constraints: list,
+    form_fallback: Optional[dict],
+    fields,
+    selection: Optional[dict] = None,
+) -> dict:
+    """Cascade states with a form fallback for constraint-less datasets.
+
+    Pure function. For each field:
+
+    * if the constraints define a universe for it, behave exactly like
+      :func:`field_states_from_constraints` (greying driven by the joint
+      combinations); otherwise
+    * fall back to ``form_fallback[field]`` as the universe and mark every
+      value enabled — with no constraints there is no co-dependency to
+      grey against, so all options stay selectable.
+
+    Parameters
+    ----------
+    constraints : list[dict]
+        As returned by :func:`get_constraints` (may be empty).
+    form_fallback : dict, optional
+        {field: [values]} from :func:`form_universes`.
+    fields : iterable[str]
+    selection : dict, optional
+    """
+    selection = selection or {}
+    form_fallback = form_fallback or {}
+    states: dict = {}
+    for field in fields:
+        constraint_universe = available_values_from_constraints(constraints, field, {})
+        if constraint_universe:
+            enabled = available_values_from_constraints(constraints, field, selection)
+            universe = constraint_universe
+        else:
+            universe = set(form_fallback.get(field, []))
+            enabled = universe  # no constraints -> nothing to grey out
+        states[field] = {v: (v in enabled) for v in sorted(universe)}
+    return states
+
+
+def field_states(
+    dataset_id: str,
+    fields,
+    selection: Optional[dict] = None,
+) -> dict:
+    """Fetch constraints (and form fallback) and compute the cascade states.
+
+    Thin fetching wrapper around :func:`field_states_from_sources`.
+    """
+    constraints = get_constraints(dataset_id)
+    fallback = form_universes(dataset_id, fields)
+    return field_states_from_sources(constraints, fallback, fields, selection)
+
+
+# ---------------------------------------------------------------------------
+# WMTS layer construction — always via WmtsLayer.to_qgis() (XYZ, working)
+# ---------------------------------------------------------------------------
+
+def build_wmts_layer_configs(
+    dataset_id: str,
+    variable: str,
+    datetimes: list,
+    descriptor: Any = None,
+) -> list:
+    """Build one QgsRasterLayer-ready config dict per timestamp.
+
+    Each dict has keys {"uri", "name", "provider", "label"} — pass
+    uri/name/provider straight into QgsRasterLayer(uri, name, provider).
+    "label" is the timestamp string, for UI display.
+
+    Always resolves through geobridge.wmts_layer(...).to_qgis() (the XYZ
+    tile approach) — never LayerDescriptor.to_qgis() (the broken WMS-
+    provider approach for this server).
+    """
+    try:
+        import geobridge as gb
+    except ImportError as exc:
+        raise GeobridgeNotInstalled(str(exc)) from exc
+
+    configs = []
+    for dt in datetimes:
+        wmts_layer = gb.wmts_layer(
+            dataset=dataset_id,
+            variable=variable,
+            datetime=dt,
+            descriptor=descriptor,
+        )
+        conf = wmts_layer.to_qgis()
+        conf["label"] = dt
+        configs.append(conf)
+    return configs
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 — GeoTIFF export. NEVER call these from a UI button handler
+# directly; they must only run inside export_task.py's QgsTask worker
+# thread, since both can take anywhere from seconds to hours.
+# ---------------------------------------------------------------------------
+
+def export_zarr_to_geotiff(
+    *,
+    dataset: str,
+    variable: str,
+    bbox: tuple,
+    time_range: tuple,
+    aggregation: str = "raw",
+    output_path: Optional[str] = None,
+    cog: bool = True,
+    target_crs: Optional[str] = None,
+    chunking: Optional[str] = None,
+) -> str:
+    try:
+        import geobridge as gb
+    except ImportError as exc:
+        raise GeobridgeNotInstalled(str(exc)) from exc
+    path = gb.zarr_to_geotiff(
+        dataset=dataset,
+        variable=variable,
+        bbox=bbox,
+        time_range=time_range,
+        aggregation=aggregation,
+        output_path=output_path,
+        cog=cog,
+        target_crs=target_crs,
+        chunking=chunking,
+    )
+    return str(path)
+
+
+def export_cds_to_geotiff(
+    *,
+    dataset: str,
+    request: dict,
+    variable: Optional[str] = None,
+    bbox: Optional[tuple] = None,
+    output_path: Optional[str] = None,
+    timeout: float = 3600,
+    progress_callback: Optional[Callable[[str], None]] = None,
+    cog: bool = True,
+) -> str:
+    try:
+        import geobridge as gb
+    except ImportError as exc:
+        raise GeobridgeNotInstalled(str(exc)) from exc
+    path = gb.cds_to_geotiff(
+        dataset=dataset,
+        request=request,
+        variable=variable,
+        bbox=bbox,
+        output_path=output_path,
+        timeout=timeout,
+        progress_callback=progress_callback,
+        cog=cog,
+    )
+    return str(path)
+
+
+# ---------------------------------------------------------------------------
+# Point time series — one WMTS GetFeatureInfo request per timestep.
+# ---------------------------------------------------------------------------
+
+def point_time_series(
+    *,
+    dataset: str,
+    variable: str,
+    lon: float,
+    lat: float,
+    start,
+    end,
+    step_days: float = 1,
+    zoom: int = 8,
+    style: str = "default",
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+    is_canceled: Optional[Callable[[], bool]] = None,
+) -> list:
+    """Return a list of geobridge.PointSample for a point over time.
+
+    Reimplements geobridge.point_time_series()'s loop (rather than calling
+    it directly) so each step can report progress and be cancelled early:
+    it issues one WMTS GetFeatureInfo request per timestep
+    (geobridge.point_value()), and a long range run from inside a QgsTask
+    needs both — the Time Series tab cancels an in-flight fetch as soon as
+    the user clicks a new point.
+    """
+    try:
+        import geobridge as gb
+    except ImportError as exc:
+        raise GeobridgeNotInstalled(str(exc)) from exc
+
+    import time
+    from datetime import datetime, timedelta
+
+    if isinstance(start, str):
+        start = datetime.fromisoformat(start.replace("Z", "+00:00") if "T" in start else start)
+    if isinstance(end, str):
+        end = datetime.fromisoformat(end.replace("Z", "+00:00") if "T" in end else end)
+    step = timedelta(days=step_days)
+
+    descriptor = gb.discover_one(dataset)
+    if descriptor is None:
+        raise gb.TimeSeriesError(
+            f"Could not discover dataset {dataset!r}. "
+            "Check the identifier or call gb.discover() to list options."
+        )
+
+    # ECMWF's WMTS server can reset a connection (WinError 10054 on Windows)
+    # if GetFeatureInfo requests land back-to-back with no pacing, which a
+    # long range easily produces since this loop fires one request per
+    # timestep. A small delay between requests plus a short retry on
+    # failure means one transient reset costs a step, not the whole fetch.
+    _REQUEST_PACING_SECONDS = 0.1
+    _MAX_RETRIES = 2
+    _RETRY_DELAY_SECONDS = 1.0
+
+    total = max(int((end - start) / step) + 1, 1)
+    samples = []
+    current = start
+    done = 0
+    while current <= end:
+        if is_canceled is not None and is_canceled():
+            break
+
+        value = None
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                value = gb.point_value(
+                    dataset, variable, lon, lat, current,
+                    zoom=zoom, style=style, descriptor=descriptor,
+                )
+                break
+            except gb.TimeSeriesError:
+                if attempt == _MAX_RETRIES:
+                    # Persistent failure for this one timestep — record it
+                    # as missing (same as "outside the data mask") rather
+                    # than aborting every other timestep in the range.
+                    value = None
+                else:
+                    time.sleep(_RETRY_DELAY_SECONDS)
+
+        samples.append(gb.PointSample(time=current, value=value))
+        done += 1
+        if progress_callback is not None:
+            progress_callback(done, total)
+        current += step
+        time.sleep(_REQUEST_PACING_SECONDS)
+
+    return samples
+
+
+# ---------------------------------------------------------------------------
+# Point time series — bulk ARCO Zarr read (long/dense series).
+# ---------------------------------------------------------------------------
+
+def zarr_point_time_series(
+    *,
+    dataset: str,
+    variable: str,
+    lon: float,
+    lat: float,
+    start,
+    end,
+    chunking: Optional[str] = None,
+) -> list:
+    """Return a list of geobridge.PointSample for a point over time.
+
+    Thin pass-through to geobridge.zarr_point_time_series(), unlike
+    point_time_series() above: the whole range comes back from one
+    (chunked) archive read rather than a per-step loop, so there's no
+    progress to report incrementally and nothing to cancel mid-flight —
+    the caller can only decide not to start it.
+
+    Requires the geobridge[zarr] extra and a prior gb.authenticate() call;
+    both are enforced inside geobridge itself, which raises
+    geobridge.modules.extract.ExtractionError with a specific message for
+    whichever one is missing.
+
+    Raises
+    ------
+    GeobridgeNotInstalled
+        If geobridge isn't installed yet.
+    """
+    try:
+        import geobridge as gb
+    except ImportError as exc:
+        raise GeobridgeNotInstalled(str(exc)) from exc
+
+    return gb.zarr_point_time_series(
+        dataset=dataset,
+        variable=variable,
+        lon=lon,
+        lat=lat,
+        start=start,
+        end=end,
+        chunking=chunking,
+    )

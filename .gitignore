@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# QGIS / editor cruft
+*.pyc
+.claude/
+
+# Local-only helper (not shipped)
+quickstart.py
+
+# Build output
+*.zip
+build/
+dist/
+
+# OS
+.DS_Store
+Thumbs.db
