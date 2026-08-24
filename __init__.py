@@ -22,6 +22,35 @@
  This script initializes the plugin, making it known to QGIS.
 """
 
+import sys
+
+
+class _NullWriter:
+    """No-op file-like object.
+
+    QGIS only wires sys.stdout/sys.stderr up to its Python Console once
+    that panel has been opened at least once in the session — until then
+    both are None (QGIS's main executable has no attached console).
+    Some of geobridge's dependencies (numpy, scikit-learn) write
+    deprecation notices straight to sys.stderr instead of going through
+    the warnings module, which raises AttributeError when it's None —
+    surfaced as noisy (but harmless) WARNING entries in the QGIS log
+    panel. Substituting a no-op writer avoids that without requiring the
+    user to ever open the console.
+    """
+
+    def write(self, *args, **kwargs):
+        pass
+
+    def flush(self, *args, **kwargs):
+        pass
+
+
+if sys.stdout is None:
+    sys.stdout = _NullWriter()
+if sys.stderr is None:
+    sys.stderr = _NullWriter()
+
 
 # noinspection PyPep8Naming
 def classFactory(iface):  # pylint: disable=invalid-name
