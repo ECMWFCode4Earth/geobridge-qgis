@@ -166,8 +166,15 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         # keeps a strong reference alive while a QThread install is running
         self._installer = None
 
-        # Area-of-interest state
-        self._aoi_bbox = None
+        # Area-of-interest state — independent per tab (Search vs Browse):
+        # drawing/selecting an AOI on one tab must never affect the other's.
+        # The QgsMapToolExtent instance itself is shared/reused (only one
+        # can be active on the canvas at a time anyway), but which bbox a
+        # completed draw is written to is decided by _aoi_target, set right
+        # before the tool is activated.
+        self._search_aoi_bbox = None
+        self._browse_aoi_bbox = None
+        self._aoi_target = None
         self._aoi_tool = None
         self._previous_map_tool = None
 
@@ -234,9 +241,9 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         self.tabWidget.addTab(self.browse_tab, "Browse by Variable")
         self.browse_tab.previewRequested.connect(self._on_browse_preview)
         self.browse_tab.downloadRequested.connect(self._on_browse_download)
-        # Reuse the Search tab's AOI machinery for the Browse tab's mirror
-        # controls — one shared self._aoi_bbox, two sets of widgets.
-        self.browse_tab.btn_draw_aoi.clicked.connect(self._on_draw_aoi_clicked)
+        # The Browse tab's AOI widgets mirror the Search tab's layout, but
+        # each tab keeps its own independent bbox — see _on_draw_aoi_clicked.
+        self.browse_tab.btn_draw_aoi.clicked.connect(self._on_browse_draw_aoi_clicked)
         self.browse_tab.btn_use_layer_extent.clicked.connect(
             self._on_browse_use_layer_extent_clicked
         )
@@ -525,7 +532,8 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
             self.cmb_step.setCurrentIndex(index)
 
     # ------------------------------------------------------------------ #
-    # Tab 2 — area of interest
+    # Area of interest — shared "draw on map" tool, independent bboxes per
+    # tab (Search / Tab 2 and Browse by Variable / Tab 4)
     # ------------------------------------------------------------------ #
 
     def _refresh_aoi_layer_combo(self):
@@ -539,6 +547,13 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
                 combo.addItem(layer.name(), layer.id())
 
     def _on_draw_aoi_clicked(self):
+        self._start_aoi_draw("search")
+
+    def _on_browse_draw_aoi_clicked(self):
+        self._start_aoi_draw("browse")
+
+    def _start_aoi_draw(self, target):
+        self._aoi_target = target
         canvas = self.iface.mapCanvas()
         if self._aoi_tool is None:
             self._aoi_tool = QgsMapToolExtent(canvas)
@@ -553,6 +568,8 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
 
         # Get the dialog out of the way so the map is fully visible while
         # drawing; restored by _on_aoi_tool_deactivated once the tool exits.
+        # This also rules out the other tab's own "Draw on map" button being
+        # clicked mid-draw, since the whole dialog (both tabs) is hidden.
         self.hide()
         self.iface.messageBar().pushInfo(
             "GeoBridge", "Drag a rectangle on the map to set the area of interest."
@@ -562,7 +579,7 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         canvas = self.iface.mapCanvas()
         source_crs = canvas.mapSettings().destinationCrs()
         bbox = _rect_to_wgs84_bbox(rect, source_crs)
-        self._set_aoi_bbox(bbox)
+        self._set_aoi_bbox(bbox, self._aoi_target or "search")
         if self._previous_map_tool is not None:
             canvas.setMapTool(self._previous_map_tool)
             self._previous_map_tool = None
@@ -573,12 +590,12 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         self.activateWindow()
 
     def _on_use_layer_extent_clicked(self):
-        self._use_layer_extent(self.cmb_aoi_layer)
+        self._use_layer_extent(self.cmb_aoi_layer, "search")
 
     def _on_browse_use_layer_extent_clicked(self):
-        self._use_layer_extent(self.browse_tab.cmb_aoi_layer)
+        self._use_layer_extent(self.browse_tab.cmb_aoi_layer, "browse")
 
-    def _use_layer_extent(self, combo):
+    def _use_layer_extent(self, combo, target):
         layer_id = combo.currentData()
         if not layer_id:
             QMessageBox.warning(self, "GeoBridge", "No layer selected.")
@@ -588,20 +605,23 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
             QMessageBox.warning(self, "GeoBridge", "Selected layer is no longer available.")
             return
         bbox = _rect_to_wgs84_bbox(layer.extent(), layer.crs())
-        self._set_aoi_bbox(bbox)
+        self._set_aoi_bbox(bbox, target)
 
-    def _set_aoi_bbox(self, bbox):
-        self._aoi_bbox = bbox
+    def _set_aoi_bbox(self, bbox, target):
+        """Store `bbox` for `target` ("search" or "browse") only — the two
+        tabs' areas of interest are independent, so this never touches the
+        other tab's stored bbox or displayed label."""
+        if target == "browse":
+            self._browse_aoi_bbox = bbox
+            lbl_bbox, lbl_warn = self.browse_tab.lbl_aoi_bbox, self.browse_tab.lbl_aoi_warning
+        else:
+            self._search_aoi_bbox = bbox
+            lbl_bbox, lbl_warn = self.lbl_aoi_bbox, self.lbl_aoi_warning
         text = aoi_utils.format_bbox(bbox)
         warning = aoi_utils.validate_bbox_size(bbox)
-        # Update both tabs' AOI displays — they share one bbox.
-        displays = [(self.lbl_aoi_bbox, self.lbl_aoi_warning)]
-        if hasattr(self, "browse_tab"):
-            displays.append((self.browse_tab.lbl_aoi_bbox, self.browse_tab.lbl_aoi_warning))
-        for lbl_bbox, lbl_warn in displays:
-            lbl_bbox.setText(text)
-            lbl_warn.setText(warning or "")
-            lbl_warn.setVisible(bool(warning))
+        lbl_bbox.setText(text)
+        lbl_warn.setText(warning or "")
+        lbl_warn.setVisible(bool(warning))
 
     def _on_build_layers_clicked(self):
         if self._current_match is None:
@@ -736,7 +756,7 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
             "dataset": dataset_id,
             "request": request,
             "variable": variable,
-            "bbox": self._aoi_bbox,   # optional area from Tab 2; None = global
+            "bbox": self._browse_aoi_bbox,   # optional area from this tab; None = global
             "output_path": path,
             "cog": True,
         }
@@ -881,7 +901,7 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
                 self, "GeoBridge", "This dataset isn't available via the ARCO Zarr path yet."
             )
             return
-        if self._aoi_bbox is None:
+        if self._search_aoi_bbox is None:
             QMessageBox.warning(
                 self, "GeoBridge", "Draw or select an area of interest first (above)."
             )
@@ -914,7 +934,7 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         params = {
             "dataset": self._current_match.dataset_id,
             "variable": self._current_match.variable,
-            "bbox": self._aoi_bbox,
+            "bbox": self._search_aoi_bbox,
             "time_range": (start.isoformat(), end.isoformat()),
             "aggregation": aggregation,
             "output_path": output_path,
