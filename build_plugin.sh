@@ -32,7 +32,10 @@ echo
 # Files/dirs never shipped (kept in sync with .gitignore). "test" is dev-only
 # (run via plain pytest per the README) — also keeps the QGIS plugin repo's
 # Bandit scan from flagging every `assert` in the test files as B101.
-EXCLUDES=( "__pycache__" "*.pyc" ".git" ".claude" "quickstart.py" "*.zip" "build" "dist" ".pytest_cache" "test" )
+# build_plugin.sh itself is excluded too: it's a dev-only packaging tool,
+# never run by QGIS, and a .sh file inside the plugin trips the plugin
+# repo's "suspicious file type" scan.
+EXCLUDES=( "__pycache__" "*.pyc" ".git" ".claude" "quickstart.py" "*.zip" "build" "dist" ".pytest_cache" "test" "build_plugin.sh" )
 
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
