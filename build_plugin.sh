@@ -49,8 +49,26 @@ rm -f "$DEST_ZIP"
 pushd "$STAGE" >/dev/null
 if command -v zip >/dev/null 2>&1; then
   zip -r -q "$DEST_ZIP" "$PLUGIN_DIR_NAME"
+elif command -v python3 >/dev/null 2>&1 || command -v python >/dev/null 2>&1; then
+  # Fallback: Python's zipfile, which always writes forward-slash entry
+  # names. PowerShell's Compress-Archive stores backslashes in nested
+  # entry names on Windows, which fails the QGIS plugin repo's strict
+  # ZIP-spec validation ("cannot contain backslashes in file names").
+  PY="$(command -v python3 || command -v python)"
+  "$PY" -c '
+import os, sys, zipfile
+root, dest = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zf:
+    for dirpath, _, filenames in os.walk(root):
+        for name in filenames:
+            full = os.path.join(dirpath, name)
+            arcname = os.path.relpath(full, os.path.dirname(root)).replace(os.sep, "/")
+            zf.write(full, arcname)
+' "$PLUGIN_DIR_NAME" "$DEST_ZIP"
 else
-  # Fallback to PowerShell's Compress-Archive on Windows
+  # Last resort: PowerShell's Compress-Archive on Windows. Known to emit
+  # backslashes in nested entry names, which the QGIS plugin repo rejects —
+  # only used if neither zip nor python is available.
   powershell.exe -NoProfile -Command \
     "Compress-Archive -Path '${PLUGIN_DIR_NAME}' -DestinationPath '$(cygpath -w "$DEST_ZIP")' -Force"
 fi
