@@ -8,7 +8,7 @@
                              -------------------
         begin                : 2026-07-05
         copyright            : (C) 2026 by GeoBridge contributors
-        email                : ilmachairas@gmail.com
+        email                : iliasmachairas@outlook.com
  ***************************************************************************/
 
 /***************************************************************************

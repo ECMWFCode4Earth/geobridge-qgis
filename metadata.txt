@@ -4,7 +4,7 @@ qgisMinimumVersion=3.28
 description=Discover, semantically search, and preview Copernicus climate data (ERA5, CAMS, CEMS) as WMTS layers directly in QGIS, powered by the geobridge Python library.
 version=0.1.0
 author=GeoBridge contributors
-email=ilmachairas@gmail.com
+email=iliasmachairas@outlook.com
 
 about=GeoBridge_Plugin wraps the geobridge library to bring Copernicus Data Store (C3S/CAMS/CEMS) dataset discovery, plain-language semantic search, and time-stepped WMTS raster preview layers (with a play/pause slider) into QGIS. Enter your CDS API key once, search for a use case ("urban heat island", "PM2.5 exposure"), and add the recommended layer straight to the map. A later phase adds GeoTIFF export via ARCO Zarr or the CDS API job queue.
 
