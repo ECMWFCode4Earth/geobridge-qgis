@@ -11,7 +11,7 @@ dependency_installer.py.
 from __future__ import annotations
 
 import os
-import subprocess
+import subprocess  # nosec B404 — used with a fixed arg list, no shell=True; see pip_install()
 import sys
 from dataclasses import dataclass
 from typing import Union
@@ -102,7 +102,10 @@ def pip_install(specs: Union[str, list], timeout: int = 600) -> PipResult:
 
     cmd = [python_exe, "-m", "pip", "install", "--upgrade", *specs]
     try:
-        result = subprocess.run(
+        # cmd is a list (no shell=True) and `specs` is always a hardcoded
+        # literal supplied by this plugin's own callers (see
+        # dependency_installer.py), never user-entered text.
+        result = subprocess.run(  # nosec B603
             cmd,
             capture_output=True,
             text=True,

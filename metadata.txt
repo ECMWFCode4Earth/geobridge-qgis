@@ -2,7 +2,7 @@
 name=GeoBridge
 qgisMinimumVersion=3.28
 description=Discover, semantically search, and preview Copernicus climate data (ERA5, CAMS, CEMS) as WMTS layers directly in QGIS, powered by the geobridge Python library.
-version=0.1.0
+version=0.1.1
 author=GeoBridge contributors
 email=iliasmachairas@outlook.com
 
@@ -14,7 +14,8 @@ repository=https://github.com/ECMWFCode4Earth/geobridge-qgis
 tracker=https://github.com/ECMWFCode4Earth/geobridge-qgis/issues
 
 hasProcessingProvider=no
-changelog=0.1.0 First release: API key tab, semantic search tab, WMTS time-slider viewer (ERA5/CAMS/CEMS via ECMWF WMTS).
+changelog=0.1.1 Security-scan fixes: narrowed broad except/pass blocks flagged by Bandit, renamed a settings-key constant that false-positived as a hardcoded secret, annotated the one legitimate subprocess call, and stopped shipping the test/ folder in the release zip.
+    0.1.0 First release: API key tab, semantic search tab, WMTS time-slider viewer (ERA5/CAMS/CEMS via ECMWF WMTS).
 
 tags=copernicus,climate,era5,cams,cems,wmts,raster,web,api,geobridge,ecmwf,c3s
 

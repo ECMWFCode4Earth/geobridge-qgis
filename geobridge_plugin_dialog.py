@@ -69,7 +69,9 @@ FORM_CLASS, _ = uic.loadUiType(
     os.path.join(os.path.dirname(__file__), "geobridge_plugin_dialog_base.ui")
 )
 
-SETTINGS_KEY_API_KEY = "GeoBridge/cds_api_key"
+# QSettings storage path for the user's saved CDS credential — not a secret
+# value itself, just the settings-tree location it's read from/written to.
+SETTINGS_PATH_CDS_CREDENTIAL = "GeoBridge/cds_credential"
 SETTINGS_KEY_LAST_EXPORT_DIR = "GeoBridge/last_export_dir"
 SETTINGS_KEY_LAST_TS_CSV_DIR = "GeoBridge/last_ts_csv_dir"
 PLAY_INTERVAL_MS = 2000
@@ -88,7 +90,9 @@ def _disable_temporal(layer):
     """
     try:
         layer.temporalProperties().setIsActive(False)
-    except Exception:
+    except (RuntimeError, AttributeError):
+        # RuntimeError: underlying C++ layer object already deleted by QGIS.
+        # AttributeError: layer type has no temporalProperties().
         pass
 
 
@@ -275,7 +279,7 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
     # ------------------------------------------------------------------ #
 
     def _load_saved_key(self):
-        key = QSettings().value(SETTINGS_KEY_API_KEY, "", type=str)
+        key = QSettings().value(SETTINGS_PATH_CDS_CREDENTIAL, "", type=str)
         self.txt_api_key.setText(key)
         if key and gb_wrapper.is_core_available():
             try:
@@ -288,7 +292,7 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
 
     def _on_save_key_clicked(self):
         key = self.txt_api_key.text().strip()
-        QSettings().setValue(SETTINGS_KEY_API_KEY, key)
+        QSettings().setValue(SETTINGS_PATH_CDS_CREDENTIAL, key)
         try:
             gb_wrapper.authenticate(key)
             self.lbl_auth_status.setText("Authenticated.")
@@ -764,7 +768,8 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         if self._group is not None:
             try:
                 root.removeChildNode(self._group)
-            except Exception:
+            except RuntimeError:
+                # Underlying C++ layer-tree node already deleted by QGIS.
                 pass
             self._group = None
 
@@ -1272,24 +1277,26 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         if self._aoi_tool is not None:
             try:
                 self._aoi_tool.extentChanged.disconnect(self._on_aoi_extent_drawn)
-            except Exception:
+            except (TypeError, RuntimeError):
+                # TypeError: signal was never connected. RuntimeError:
+                # underlying C++ map tool object already deleted.
                 pass
             try:
                 self._aoi_tool.deactivated.disconnect(self._on_aoi_tool_deactivated)
-            except Exception:
+            except (TypeError, RuntimeError):
                 pass
         if self._ts_tool is not None:
             try:
                 self._ts_tool.canvasClicked.disconnect(self._on_ts_point_clicked)
-            except Exception:
+            except (TypeError, RuntimeError):
                 pass
             try:
                 self._ts_tool.deactivated.disconnect(self._on_ts_tool_deactivated)
-            except Exception:
+            except (TypeError, RuntimeError):
                 pass
         try:
             QgsProject.instance().cleared.disconnect(self._on_project_cleared)
-        except Exception:
+        except (TypeError, RuntimeError):
             pass
 
         try:
@@ -1304,7 +1311,8 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         if self._group is not None:
             try:
                 root.removeChildNode(self._group)
-            except Exception:
+            except RuntimeError:
+                # Underlying C++ layer-tree node already deleted by QGIS.
                 pass
 
         self._layer_ids = []
