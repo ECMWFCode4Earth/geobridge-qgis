@@ -99,7 +99,7 @@ class ExportTask(QgsTask):
     """
 
     def __init__(self, description: str, kind: str, params: dict, add_to_map: bool = True):
-        super().__init__(description, QgsTask.CanCancel)
+        super().__init__(description, QgsTask.Flag.CanCancel)
         if kind not in ("zarr", "cds"):
             raise ValueError(f"kind must be 'zarr' or 'cds', got {kind!r}")
         self.kind = kind
@@ -130,9 +130,9 @@ class ExportTask(QgsTask):
                     QgsMessageLog.logMessage(
                         f"GeoBridge export produced an invalid raster: {self.result_path}",
                         LOG_TAG,
-                        Qgis.Warning,
+                        Qgis.MessageLevel.Warning,
                     )
         else:
             QgsMessageLog.logMessage(
-                f"GeoBridge export failed: {self.exception}", LOG_TAG, Qgis.Critical
+                f"GeoBridge export failed: {self.exception}", LOG_TAG, Qgis.MessageLevel.Critical
             )

@@ -41,14 +41,14 @@ class TimeSeriesPlotWidget(QWidget):
 
     def paintEvent(self, event):  # noqa: N802 — Qt override
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect = self.rect()
         painter.fillRect(rect, self.palette().base())
 
         valid = [s for s in self._samples if s.value is not None]
         if len(valid) < 2:
             painter.setPen(QPen(self.palette().text().color()))
-            painter.drawText(rect, Qt.AlignCenter, "No data to plot yet.")
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, "No data to plot yet.")
             painter.end()
             return
 
@@ -82,19 +82,19 @@ class TimeSeriesPlotWidget(QWidget):
         painter.setPen(text_pen)
         painter.drawText(
             QRectF(0, plot_rect.top() - 8, _MARGIN_LEFT - 6, 16),
-            Qt.AlignRight | Qt.AlignVCenter, f"{v_max:.3g}",
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, f"{v_max:.3g}",
         )
         painter.drawText(
             QRectF(0, plot_rect.bottom() - 8, _MARGIN_LEFT - 6, 16),
-            Qt.AlignRight | Qt.AlignVCenter, f"{v_min:.3g}",
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, f"{v_min:.3g}",
         )
         painter.drawText(
             QRectF(plot_rect.left(), plot_rect.bottom() + 4, 160, 20),
-            Qt.AlignLeft, t_min.strftime("%Y-%m-%d"),
+            Qt.AlignmentFlag.AlignLeft, t_min.strftime("%Y-%m-%d"),
         )
         painter.drawText(
             QRectF(plot_rect.right() - 160, plot_rect.bottom() + 4, 160, 20),
-            Qt.AlignRight, t_max.strftime("%Y-%m-%d"),
+            Qt.AlignmentFlag.AlignRight, t_max.strftime("%Y-%m-%d"),
         )
 
         # Draw across *all* samples (not just `valid`) so a None value

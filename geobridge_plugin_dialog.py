@@ -140,7 +140,7 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         # tab's whole workflow is "click a point on the map canvas, watch
         # this dialog update live", which only works if the dialog can't
         # get buried behind the main window the moment the canvas gets focus.
-        self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
 
         # Tab 2 state
         self._matches = []
@@ -432,7 +432,7 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         if not matches:
             self.list_results.setRowCount(1)
             item = QtWidgets.QTableWidgetItem("No matches — try a different phrase.")
-            item.setFlags(item.flags() & ~Qt.ItemIsSelectable)
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
             self.list_results.setItem(0, 0, item)
             self.list_results.setSpan(0, 0, 1, self.list_results.columnCount())
             return
@@ -611,9 +611,9 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
                 "GeoBridge",
                 f"This range/step would build {exc.count} layers "
                 f"(cap is {exc.max_steps}). Build the first {exc.max_steps} instead?",
-                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
-            if answer != QMessageBox.Yes:
+            if answer != QMessageBox.StandardButton.Yes:
                 return
             steps = time_utils.generate_time_steps(start, end, step, truncate=True)
         except ValueError as exc:
@@ -709,9 +709,9 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
                 self, "GeoBridge",
                 "This request may not be valid:\n\n- " + "\n- ".join(errors)
                 + "\n\nSubmit to CDS anyway?",
-                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
-            if answer != QMessageBox.Yes:
+            if answer != QMessageBox.StandardButton.Yes:
                 return
 
         default_name = f"{dataset_id}_{variable}.tif"
@@ -897,9 +897,10 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
             warning = export_utils.raw_aggregation_span_warning(span_days)
             if warning:
                 answer = QMessageBox.question(
-                    self, "GeoBridge", warning, QMessageBox.Yes | QMessageBox.No
+                    self, "GeoBridge", warning,
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 )
-                if answer != QMessageBox.Yes:
+                if answer != QMessageBox.StandardButton.Yes:
                     return
 
         params = {

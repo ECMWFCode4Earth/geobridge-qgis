@@ -114,7 +114,7 @@ class BrowseTab(QWidget):
         # the top, so scrolling the lists below never hides what's chosen.
         self.lbl_summary = QLabel("Nothing selected yet.")
         self.lbl_summary.setWordWrap(True)
-        self.lbl_summary.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.lbl_summary.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.lbl_summary.setStyleSheet("font-weight:bold; padding:2px 0;")
         outer.addWidget(self.lbl_summary)
 
@@ -167,9 +167,9 @@ class BrowseTab(QWidget):
 
             lst = QListWidget()
             mode = (
-                QListWidget.ExtendedSelection
+                QListWidget.SelectionMode.ExtendedSelection
                 if field in MULTI_FIELDS
-                else QListWidget.SingleSelection
+                else QListWidget.SelectionMode.SingleSelection
             )
             lst.setSelectionMode(mode)
             lst.setMaximumHeight(170)
@@ -224,7 +224,7 @@ class BrowseTab(QWidget):
         box_layout.setContentsMargins(12, 14, 12, 14)
         self.lbl_request = QLabel("Nothing selected yet.")
         self.lbl_request.setWordWrap(True)
-        self.lbl_request.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.lbl_request.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         box_layout.addWidget(self.lbl_request)
 
         self.btn_preview = QPushButton("Preview as WMTS layer")
@@ -297,7 +297,7 @@ class BrowseTab(QWidget):
         self.list_dataset.clear()
         for ds in datasets:
             item = QListWidgetItem(getattr(ds, "title", None) or ds.id)
-            item.setData(Qt.UserRole, ds.id)
+            item.setData(Qt.ItemDataRole.UserRole, ds.id)
             self.list_dataset.addItem(item)
         self.list_dataset.blockSignals(False)
 
@@ -308,7 +308,7 @@ class BrowseTab(QWidget):
     def _on_dataset_changed(self, current, _previous=None):
         if current is None:
             return
-        dataset_id = current.data(Qt.UserRole)
+        dataset_id = current.data(Qt.ItemDataRole.UserRole)
         self._dataset_id = dataset_id
         self._dataset_title = current.text()
         self.lbl_dataset_sel.setText(current.text())
@@ -378,7 +378,7 @@ class BrowseTab(QWidget):
     @staticmethod
     def _selected_values(lst: QListWidget) -> list:
         """All selected values in list order (0, 1, or many)."""
-        return [it.data(Qt.UserRole) for it in lst.selectedItems()]
+        return [it.data(Qt.ItemDataRole.UserRole) for it in lst.selectedItems()]
 
     def _recompute(self, initial: bool = False):
         """Repaint every field's enabled/greyed state from the constraints.
@@ -424,10 +424,12 @@ class BrowseTab(QWidget):
             lst.clear()
             for value, enabled in state_map.items():
                 item = QListWidgetItem(self._label_for(field, value))
-                item.setData(Qt.UserRole, value)
+                item.setData(Qt.ItemDataRole.UserRole, value)
                 if not enabled:
                     item.setFlags(
-                        item.flags() & ~Qt.ItemIsEnabled & ~Qt.ItemIsSelectable
+                        item.flags()
+                        & ~Qt.ItemFlag.ItemIsEnabled
+                        & ~Qt.ItemFlag.ItemIsSelectable
                     )
                 lst.addItem(item)
                 if value in prev and enabled:

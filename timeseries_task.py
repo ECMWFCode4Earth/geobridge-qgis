@@ -30,7 +30,7 @@ LOG_TAG = "GeoBridge"
 
 class TimeSeriesTask(QgsTask):
     def __init__(self, description: str, method: str, params: dict):
-        super().__init__(description, QgsTask.CanCancel)
+        super().__init__(description, QgsTask.Flag.CanCancel)
         self.method = method
         self.params = params
         self.samples = None
