@@ -368,7 +368,15 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         # ARCO Zarr stores over https://) is otherwise missing them — fixed
         # at the source for the next geobridge release, but this install
         # needs to work against what's on PyPI today.
-        self._installer = DependencyInstaller(["geobridge[zarr]>=0.1.8", "aiohttp", "requests"])
+        #
+        # netcdf4 is added explicitly too: gb.cds_to_geotiff() (the CDS API
+        # download path used for datasets not yet in the ARCO Zarr lake,
+        # e.g. ERA5-Land via the Browse tab) reads the NetCDF file CDS
+        # returns via this package, but it isn't part of geobridge[zarr]
+        # itself (that extra only covers the ARCO/Zarr read path).
+        self._installer = DependencyInstaller(
+            ["geobridge[zarr]>=0.1.8", "aiohttp", "requests", "netcdf4"]
+        )
         self._installer.finished_ok.connect(self._on_core_install_done)
         self._installer.finished_err.connect(self._on_core_install_failed)
         self._installer.start()

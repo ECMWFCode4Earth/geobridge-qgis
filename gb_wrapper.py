@@ -47,15 +47,23 @@ def is_zarr_extra_available() -> bool:
 
     Needed only for Phase 2 (zarr_to_geotiff / cds_to_geotiff / fuse).
 
-    Also checks `aiohttp`/`requests` even though they aren't part of
-    `geobridge[zarr]` itself: published geobridge[zarr] on PyPI declares
-    plain "fsspec" rather than "fsspec[http]", so fsspec's HTTPFileSystem
-    (used to open the ARCO Zarr stores over https://) silently lacks them
-    otherwise. Without this check, a QGIS install that already has the six
-    core zarr-tier packages but not aiohttp/requests reports as "fully
-    installed" and hides the only button that would fix it — see
+    Also checks `aiohttp`/`requests`/`netCDF4` even though none of the
+    three are part of `geobridge[zarr]` itself:
+
+    - published geobridge[zarr] on PyPI declares plain "fsspec" rather
+      than "fsspec[http]", so fsspec's HTTPFileSystem (used to open the
+      ARCO Zarr stores over https://) silently lacks aiohttp/requests
+      otherwise.
+    - gb.cds_to_geotiff() (the CDS API download path for datasets not yet
+      in the ARCO lake, e.g. ERA5-Land via the Browse tab) needs netCDF4
+      to read the NetCDF file CDS returns, but that's outside the [zarr]
+      extra's scope (ARCO/Zarr reads only).
+
+    Without this check, a QGIS install that already has the six core
+    zarr-tier packages but not these three reports as "fully installed"
+    and hides the only button that would fix it — see
     `_on_install_core_clicked` in geobridge_plugin_dialog.py, which
-    installs all three together for exactly this reason.
+    installs all four together for exactly this reason.
     """
     try:
         import dask  # noqa: F401
@@ -66,6 +74,7 @@ def is_zarr_extra_available() -> bool:
         import zarr  # noqa: F401
         import aiohttp  # noqa: F401
         import requests  # noqa: F401
+        import netCDF4  # noqa: F401
     except ImportError:
         return False
     return True

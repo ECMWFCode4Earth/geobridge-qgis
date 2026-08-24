@@ -2,7 +2,7 @@
 name=GeoBridge
 qgisMinimumVersion=3.28
 description=Discover, semantically search, and preview Copernicus climate data (ERA5, CAMS, CEMS) as WMTS layers directly in QGIS, powered by the geobridge Python library.
-version=0.1.5
+version=0.1.6
 author=GeoBridge contributors
 email=iliasmachairas@outlook.com
 
@@ -14,7 +14,8 @@ repository=https://github.com/ECMWFCode4Earth/geobridge-qgis
 tracker=https://github.com/ECMWFCode4Earth/geobridge-qgis/issues
 
 hasProcessingProvider=no
-changelog=0.1.5 Silence harmless "AttributeError: 'NoneType' object has no attribute 'write'" log spam from numpy/scikit-learn (a geobridge dependency) writing deprecation notices to sys.stderr, which QGIS leaves as None until its Python Console has been opened once.
+changelog=0.1.6 Fix "No module named 'netCDF4'" when exporting/downloading CDS-API-path datasets not in the ARCO Zarr lake (e.g. ERA5-Land via the Browse tab): netcdf4 is now installed alongside geobridge[zarr], and the dependency-availability check catches its absence instead of reporting everything as installed.
+    0.1.5 Silence harmless "AttributeError: 'NoneType' object has no attribute 'write'" log spam from numpy/scikit-learn (a geobridge dependency) writing deprecation notices to sys.stderr, which QGIS leaves as None until its Python Console has been opened once.
     0.1.4 Qt6 compatibility: fully qualified 33 unscoped enum references (Qt.AlignLeft -> Qt.AlignmentFlag.AlignLeft, QMessageBox.Yes -> QMessageBox.StandardButton.Yes, etc.) across timeseries_task.py, export_task.py, ts_plot_widget.py, browse_tab.py, geobridge_plugin_dialog.py.
     0.1.3 Stopped shipping .gitignore in the release zip — a hidden file inside the plugin tripped the plugin repo's suspicious-file scan.
     0.1.2 Stopped shipping build_plugin.sh in the release zip — a .sh file inside the plugin tripped the plugin repo's suspicious-file-type scan.
