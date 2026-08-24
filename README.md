@@ -1,6 +1,6 @@
-# GeoBridge_Plugin
+# geobridge-qgis
 
-Plugin source: https://github.com/ECMWFCode4Earth/geobridge-qgis
+Access and integrate C3S climate data directly in QGIS.
 
 A QGIS 3 plugin that wraps the [geobridge](https://github.com/ECMWFCode4Earth/GeoBridge)
 Python library: enter a Copernicus CDS API key once, semantically search for a use case
