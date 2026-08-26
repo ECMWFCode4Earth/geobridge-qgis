@@ -13,6 +13,12 @@ semantic search index.
 Cascading selection
 ----------------------
 
+The **Dataset** list is restricted to datasets present in ``geobridge``'s
+bundled ``cds_snapshot.yaml`` catalogue — the genuine CDS/ADS STAC
+catalogue snapshot, as opposed to a handful of ARCO/Zarr-only entries
+``geobridge.discover()`` also returns that have no corresponding CDS
+catalogue entry.
+
 Pick a **Dataset** from the filterable list, then a **Variable**, then
 **Year** / **Month** / **Day**. Each list only offers what's actually
 available given everything already picked — options with no data for the

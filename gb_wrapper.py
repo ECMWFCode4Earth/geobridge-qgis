@@ -141,17 +141,58 @@ def discover_one(dataset_id: str):
     return gb.discover_one(dataset_id)
 
 
-def discover_all(keyword: Optional[str] = None) -> list:
-    """Return the list of geobridge LayerDescriptors in the catalogue.
+def _cds_snapshot_dataset_ids() -> Optional[set]:
+    """Dataset ids (hyphenated, CDS-style) present in geobridge's bundled
+    `semantic/cds_snapshot.yaml` — the STAC catalogue snapshot geobridge
+    ships and refreshes itself, as opposed to `arco_snapshot.yaml` (the
+    narrower ARCO/Zarr-backed subset merged into the same discover()
+    result). Returns None if the snapshot can't be located/read, so the
+    caller can fall back to showing everything rather than an empty list.
+    """
+    try:
+        import geobridge
+        import yaml
+    except ImportError:
+        return None
+    from pathlib import Path
 
-    Used to populate the dataset dropdown on the Browse-by-Variable tab.
-    Reads the locally bundled catalogue snapshot — no network call.
+    snapshot_path = Path(geobridge.__file__).parent / "semantic" / "cds_snapshot.yaml"
+    if not snapshot_path.exists():
+        return None
+    try:
+        with snapshot_path.open(encoding="utf-8") as fp:
+            data = yaml.safe_load(fp) or {}
+    except (OSError, yaml.YAMLError):
+        return None
+    return set((data.get("datasets") or {}).keys())
+
+
+def discover_all(keyword: Optional[str] = None) -> list:
+    """Return geobridge LayerDescriptors restricted to datasets present in
+    the bundled cds_snapshot.yaml catalogue (used to populate the dataset
+    dropdown on the Browse-by-Variable tab).
+
+    `geobridge.discover()` on its own merges in `arco_snapshot.yaml` too,
+    which can include ARCO/Zarr-only entries that were never part of the
+    CDS STAC catalogue snapshot; those are filtered back out here so the
+    Browse tab shows only genuine CDS-catalogue datasets. ARCO-sourced
+    descriptors that *do* have a matching cds_snapshot.yaml entry (the
+    common case — most ARCO datasets are also in the CDS catalogue) are
+    kept; only entries with no cds_snapshot.yaml backing at all are
+    dropped. Reads local snapshot files only — no network call.
     """
     try:
         import geobridge as gb
     except ImportError as exc:
         raise GeobridgeNotInstalled(str(exc)) from exc
-    return gb.discover(keyword=keyword) if keyword else gb.discover()
+    results = gb.discover(keyword=keyword) if keyword else gb.discover()
+
+    cds_ids = _cds_snapshot_dataset_ids()
+    if cds_ids is None:
+        return results
+    # ARCO-sourced descriptor ids are underscored; cds_snapshot.yaml's are
+    # hyphenated — normalise before comparing.
+    return [ds for ds in results if ds.id.replace("_", "-") in cds_ids]
 
 
 # ---------------------------------------------------------------------------
