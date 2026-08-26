@@ -43,8 +43,9 @@ from datetime import timedelta
 
 from qgis.PyQt import uic
 from qgis.PyQt import QtWidgets
-from qgis.PyQt.QtCore import QDate, QDateTime, QSize, Qt, QSettings, QTime, QTimer
-from qgis.PyQt.QtWidgets import QFileDialog, QMessageBox
+from qgis.PyQt.QtCore import QDate, QDateTime, QPointF, QSize, Qt, QSettings, QTime, QTimer
+from qgis.PyQt.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
+from qgis.PyQt.QtWidgets import QFileDialog, QLineEdit, QMessageBox
 from qgis.core import (
     QgsApplication,
     QgsCoordinateReferenceSystem,
@@ -112,6 +113,38 @@ def _cds_dataset_url(dataset_id: str) -> str:
     understandable to a non-specialist).
     """
     return f"https://cds.climate.copernicus.eu/datasets/{dataset_id.replace('_', '-')}"
+
+
+def _eye_icon(crossed: bool) -> QIcon:
+    """Small line-drawn "eye" / "eye with a slash through it" icon for the
+    API key show/hide toggle.
+
+    Drawn with QPainter rather than shipped as an image file, so the
+    plugin's asset footprint stays at just icon.png and the icon renders
+    identically on every platform (no emoji-font variance).
+    """
+    size = 16
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(QColor("#5a5a5a"))
+    pen.setWidthF(1.4)
+    painter.setPen(pen)
+
+    # Almond-shaped outline: two quadratic curves meeting at the corners.
+    path = QPainterPath()
+    path.moveTo(1.5, 8)
+    path.quadTo(8, 1.5, 14.5, 8)
+    path.quadTo(8, 14.5, 1.5, 8)
+    painter.drawPath(path)
+    painter.drawEllipse(QPointF(8, 8), 2.2, 2.2)  # pupil
+
+    if crossed:
+        painter.drawLine(QPointF(2, 2), QPointF(14, 14))
+
+    painter.end()
+    return QIcon(pixmap)
 
 
 def _rect_to_wgs84_bbox(rect, source_crs):
@@ -211,6 +244,17 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         self.btn_save_key.clicked.connect(self._on_save_key_clicked)
         self.btn_install_core.clicked.connect(self._on_install_core_clicked)
 
+        # Eye icon inside the API key field to toggle Password/Normal echo
+        # mode — inline QLineEdit action rather than a separate button, so
+        # it doesn't need its own spot in the tab's absolute-positioned
+        # layout.
+        self._key_visible = False
+        self._key_visibility_action = self.txt_api_key.addAction(
+            _eye_icon(crossed=False), QLineEdit.ActionPosition.TrailingPosition
+        )
+        self._key_visibility_action.setToolTip("Show API key")
+        self._key_visibility_action.triggered.connect(self._on_toggle_key_visibility)
+
         # --- signals — Tab 2 ---
         self.btn_search.clicked.connect(self._on_search_clicked)
         self.txt_query.returnPressed.connect(self._on_search_clicked)
@@ -308,6 +352,16 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         except Exception as exc:
             # geobridge.AuthenticationError, or any other geobridge exception
             self.lbl_auth_status.setText(f"Authentication failed: {exc}")
+
+    def _on_toggle_key_visibility(self):
+        self._key_visible = not self._key_visible
+        if self._key_visible:
+            self.txt_api_key.setEchoMode(QLineEdit.EchoMode.Normal)
+            self._key_visibility_action.setToolTip("Hide API key")
+        else:
+            self.txt_api_key.setEchoMode(QLineEdit.EchoMode.Password)
+            self._key_visibility_action.setToolTip("Show API key")
+        self._key_visibility_action.setIcon(_eye_icon(crossed=self._key_visible))
 
     # ------------------------------------------------------------------ #
     # Dependency install (core tier)

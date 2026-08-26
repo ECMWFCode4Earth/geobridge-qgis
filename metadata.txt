@@ -2,7 +2,7 @@
 name=GeoBridge
 qgisMinimumVersion=3.28
 description=Discover, semantically search, and preview Copernicus climate data (ERA5, CAMS, CEMS) as WMTS layers directly in QGIS, powered by the geobridge Python library.
-version=0.1.9
+version=0.1.10
 author=GeoBridge contributors
 email=iliasmachairas@outlook.com
 
@@ -14,7 +14,8 @@ repository=https://github.com/ECMWFCode4Earth/geobridge-qgis
 tracker=https://github.com/ECMWFCode4Earth/geobridge-qgis/issues
 
 hasProcessingProvider=no
-changelog=0.1.9 Browse by Variable tab now lists only datasets present in geobridge's cds_snapshot.yaml catalogue, dropping ARCO-only entries with no CDS catalogue backing (142 -> 136 datasets on the current geobridge version).
+changelog=0.1.10 Add a show/hide eye icon inside the API Key field (masked by default) so you can check what you typed before saving.
+    0.1.9 Browse by Variable tab now lists only datasets present in geobridge's cds_snapshot.yaml catalogue, dropping ARCO-only entries with no CDS catalogue backing (142 -> 136 datasets on the current geobridge version).
     0.1.8 Add Sphinx documentation (docs/, ready for Read the Docs) covering installation and each tab, with screenshots. Docs source is excluded from the shipped plugin zip, same as build_plugin.sh and test/.
     0.1.7 Fix area-of-interest bleed-through between the Search tab and Browse-by-Variable tab: they shared a single bbox, so drawing/selecting an area in one tab silently overwrote what the other tab would export/download. Each tab now keeps its own independent area of interest.
     0.1.6 Fix "No module named 'netCDF4'" when exporting/downloading CDS-API-path datasets not in the ARCO Zarr lake (e.g. ERA5-Land via the Browse tab): netcdf4 is now installed alongside geobridge[zarr], and the dependency-availability check catches its absence instead of reporting everything as installed.

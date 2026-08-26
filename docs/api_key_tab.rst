@@ -25,7 +25,8 @@ API key
 --------
 
 * **Copernicus CDS API key** — paste your personal access token from your
-  CDS profile page here.
+  CDS profile page here. The field is masked by default; click the eye
+  icon inside it to reveal or re-hide what you typed.
 * **Save** — stores the key (via QGIS's ``QSettings``) and immediately
   attempts to authenticate with it. The status label next to the button
   reports the result ("Authenticated." or an error message).
