@@ -97,3 +97,27 @@ full path from a blank browser tab to a working one.
    The token belongs to your CDS account, not to this plugin — the same
    value also works with the standalone ``cdsapi`` Python package or a
    manual ``~/.cdsapirc`` file, if you use those elsewhere too.
+
+Two things trip people up on a first attempt
+-------------------------------------------------
+
+* **The licence has to be accepted, not just the account created.**
+  Registering an account and accepting the licence (step 4 above) are
+  two separate things — a freshly registered account authenticates
+  fine, but CDS still rejects every download with a licence error until
+  the Terms of use are explicitly accepted on the **Licences** tab.
+
+  .. figure:: _static/screenshots/cds_accept_licences.png
+     :alt: The Licences tab on the CDS profile page, every item accepted
+     :width: 450px
+
+* **Paste only the key itself.** The copy icon (step 5 above) copies
+  just the raw token — that's the only part that goes into this tab's
+  **Copernicus CDS API key** field below. Don't paste the ``url:`` line
+  or the ``key:`` label CDS shows next to it in the ``.cdsapirc``
+  snippet — those are for the separate standalone ``cdsapi`` Python
+  package, not for this plugin.
+
+  .. figure:: _static/screenshots/api_key_tab.png
+     :alt: The API Key tab, with the Copernicus CDS API key field to paste the token into
+     :width: 500px
