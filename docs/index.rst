@@ -1,6 +1,10 @@
 GeoBridge QGIS Plugin
 ======================
 
+.. image:: _static/icon.png
+   :width: 48px
+   :align: left
+
 GeoBridge is a QGIS 3 plugin that wraps the `geobridge
 <https://github.com/ECMWFCode4Earth/GeoBridge>`_ Python library: discover,
 semantically search, and preview Copernicus climate data (ERA5, CAMS, CEMS)
