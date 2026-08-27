@@ -104,3 +104,13 @@ builds a WMS-provider URI that QGIS cannot reliably parse against ECMWF's WMTS s
 ## License
 
 MIT. See `LICENSE`.
+
+## Authors
+
+**Mentors**
+- Angel Lopez Alos
+- Samuel Almond
+
+**Participants**
+- Ilias Machairas
+- Konstantinos Fokeas
