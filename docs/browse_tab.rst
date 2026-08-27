@@ -33,16 +33,12 @@ Optional — same mechanism as the :doc:`search_tab`'s (**Draw on map** or
 **from layer** + **Use extent**), but tracked **independently**: setting
 an area here does not affect the Search tab's area, and vice versa.
 
-Preview and download
-------------------------
+Download
+-----------
 
 The **Selection** panel on the right shows the exact request that will be
-sent, plus three actions:
+sent, plus two actions:
 
-* **Preview as WMTS layer** — adds a single time-step WMTS layer to the
-  map for a quick look, reusing the same WMTS machinery as the
-  :doc:`search_tab`. Not every dataset has a WMTS layer available (shown
-  as *"No WMTS preview for this dataset — Download only."* when so).
 * **Download GeoTIFF** — submits the request through the CDS API job
   queue and converts the result to GeoTIFF once it completes. This runs
   as a background task and can take anywhere from minutes to hours

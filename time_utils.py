@@ -12,9 +12,16 @@ from __future__ import annotations
 import re
 from collections import OrderedDict
 from datetime import datetime, timedelta
-from typing import List
+from typing import List, Optional
 
 # Ordered so the UI combo box lists them from finest to coarsest granularity.
+# "1 month"/"1 year" are fixed 30-/365-day intervals rather than true
+# calendar months/years (timedelta has no calendar concept) — close enough
+# for a UI step size, and their total_seconds() are what let
+# exact_step_choice() recognize a genuinely monthly/yearly dataset's native
+# resolution (several ARCO datasets report time_step="month" or "year";
+# without an entry here for it to match, those could never get a raw
+# match at all).
 STEP_CHOICES = OrderedDict(
     [
         ("1 hour", timedelta(hours=1)),
@@ -22,6 +29,8 @@ STEP_CHOICES = OrderedDict(
         ("6 hours", timedelta(hours=6)),
         ("1 day", timedelta(days=1)),
         ("1 week", timedelta(days=7)),
+        ("1 month", timedelta(days=30)),
+        ("1 year", timedelta(days=365)),
     ]
 )
 
@@ -143,19 +152,41 @@ _UNIT_SECONDS = {
     "w": 604800,
     "week": 604800,
     "weeks": 604800,
+    # Approximate — only used for picking/matching a STEP_CHOICES entry,
+    # never for actual date arithmetic (see generate_time_steps).
+    "month": 30 * 86400,
+    "months": 30 * 86400,
+    "year": 365 * 86400,
+    "years": 365 * 86400,
 }
 
+# Raw time_step values seen in geobridge's catalogue with no fixed periodic
+# cadence at all (as opposed to one _UNIT_SECONDS just doesn't recognize
+# yet) — never treat these as any specific interval.
+_NONPERIODIC = {"nonperiodic", "irregular", "variable"}
 
-def _parse_time_step_seconds(raw: str) -> int:
-    """Best-effort parse of a dataset's time_step string into seconds.
 
-    Handles forms like "1h", "3 hours", "day", "P1D" (ISO-8601 duration,
-    day/hour components only — the only ones GeoBridge's snapshots use).
-    Falls back to 1 hour if the string can't be parsed.
+def _parse_time_step_seconds(raw: str) -> Optional[int]:
+    """Best-effort parse of a dataset's time_step string into seconds, or
+    None if it can't be parsed (including explicitly non-periodic datasets).
+
+    Handles forms like "1h", "3 hours", "3-hour", "day", "month",
+    "P1D" (ISO-8601 duration, day/hour components only — the only ones
+    GeoBridge's snapshots use).
+
+    IMPORTANT: a failed parse must return None here, not a guessed
+    fallback value — a caller (originally default_step_choice, before
+    exact_step_choice existed) silently defaulting an unrecognized string
+    to "1 hour" is exactly what let unsupported units like "month" or
+    "3-hour" (hyphenated forms didn't match the old regex) get
+    misidentified as an *exact* match to the "1 hour" STEP_CHOICES entry,
+    flagging monthly/3-hourly datasets as "1 hour (raw)" in the UI.
     """
     if not raw:
-        return _UNIT_SECONDS["hour"]
+        return None
     raw = raw.strip().lower()
+    if raw in _NONPERIODIC:
+        return None
 
     iso_match = re.fullmatch(r"p(?:(\d+)d)?(?:t(?:(\d+)h)?)?", raw)
     if iso_match and (iso_match.group(1) or iso_match.group(2)):
@@ -163,23 +194,28 @@ def _parse_time_step_seconds(raw: str) -> int:
         hours = int(iso_match.group(2) or 0)
         return days * 86400 + hours * 3600
 
-    match = re.fullmatch(r"(\d+)\s*([a-z]+)", raw)
+    # Allow a hyphen or whitespace (or nothing) between the number and unit
+    # — geobridge's snapshots use both "3 hours" and "3-hour" forms.
+    match = re.fullmatch(r"(\d+)[\s-]*([a-z]+)", raw)
     if match:
         n, unit = match.groups()
         unit_seconds = _UNIT_SECONDS.get(unit)
         if unit_seconds:
             return int(n) * unit_seconds
+        return None
 
-    unit_seconds = _UNIT_SECONDS.get(raw)
-    if unit_seconds:
-        return unit_seconds
-
-    return _UNIT_SECONDS["hour"]
+    return _UNIT_SECONDS.get(raw)
 
 
 def default_step_choice(raw_time_step: str) -> str:
-    """Return the STEP_CHOICES label closest to a dataset's raw time_step."""
+    """Return the STEP_CHOICES label closest to a dataset's raw time_step,
+    or the finest (first) choice if the raw value is unparseable/unknown —
+    picking *something* reasonable to preselect, same as before, just no
+    longer via a fake "as if it were 1 hour" seconds value feeding into the
+    closest-match comparison below."""
     target_seconds = _parse_time_step_seconds(raw_time_step)
+    if target_seconds is None:
+        return next(iter(STEP_CHOICES))
     best_label = next(iter(STEP_CHOICES))
     best_diff = None
     for label, delta in STEP_CHOICES.items():
@@ -188,3 +224,58 @@ def default_step_choice(raw_time_step: str) -> str:
             best_diff = diff
             best_label = label
     return best_label
+
+
+def finer_than_native_steps(raw_time_step: str) -> set:
+    """Return the STEP_CHOICES labels strictly finer (shorter interval)
+    than a dataset's native time_step — e.g. native "month" ->
+    {"1 hour", "3 hours", "6 hours", "1 day", "1 week"}. There is no real
+    data at those intervals, so a caller can use this to grey them out
+    rather than let a user pick a granularity the dataset simply doesn't
+    have.
+
+    Returns an empty set (never disable anything) when the native step
+    can't be parsed, and also when *every* choice would come out finer
+    (a native step coarser than the coarsest offered choice, "1 year") —
+    that would leave nothing selectable, which is worse than not
+    filtering at all.
+    """
+    target_seconds = _parse_time_step_seconds(raw_time_step)
+    if target_seconds is None:
+        return set()
+    finer = {
+        label for label, delta in STEP_CHOICES.items()
+        if delta.total_seconds() < target_seconds
+    }
+    if len(finer) >= len(STEP_CHOICES):
+        return set()
+    return finer
+
+
+def native_step_seconds(raw_time_step: str) -> Optional[int]:
+    """Public wrapper around the module's raw-time_step parser — a
+    dataset's native time_step converted to seconds, or None if it can't
+    be parsed. Lets callers compare against granularities that aren't
+    themselves STEP_CHOICES entries (e.g. export_utils's aggregation
+    keys), without duplicating the parsing regexes."""
+    return _parse_time_step_seconds(raw_time_step)
+
+
+def exact_step_choice(raw_time_step: str) -> Optional[str]:
+    """Return the STEP_CHOICES label whose interval exactly matches a
+    dataset's raw time_step (within 1 second, to absorb float rounding), or
+    None if no entry matches exactly.
+
+    Unlike default_step_choice() (always returns the *closest* entry, even
+    when that means resampling), this tells the caller whether the
+    dataset's native resolution is actually one of the offered choices —
+    e.g. a dataset natively at 12-hour resolution has no exact match among
+    1h/3h/6h/1day/1week, so every choice for it involves resampling.
+    """
+    target_seconds = _parse_time_step_seconds(raw_time_step)
+    if target_seconds is None:
+        return None
+    for label, delta in STEP_CHOICES.items():
+        if abs(delta.total_seconds() - target_seconds) < 1:
+            return label
+    return None

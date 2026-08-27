@@ -3,7 +3,8 @@
 geobridge_plugin_dialog
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-The plugin's main (and only) dialog: a QTabWidget host with three tabs.
+The plugin's main (and only) dialog: a QTabWidget host with four tabs, in
+visible order: API Key, Search, Browse by Variable, Time Series.
 
 Tab 1 (API key): enter/save a Copernicus CDS API key (persisted via
 QSettings), plus a dependency banner + "Install dependencies" button shown
@@ -17,7 +18,12 @@ LayerDescriptor.to_qgis()) and cycles through them with a play/pause
 slider, mirroring test_temporal_dialog.py's ERA5 block. Export to GeoTIFF
 (ARCO Zarr-backed datasets only) lives in this tab too, as a group box.
 
-Tab 3 (Time Series): pick a point on the map canvas for the dataset/
+Tab 3 (Browse by Variable, browse_tab.py — built in code, inserted between
+Search and Time Series, not defined in the .ui): pick a dataset/variable/
+date explicitly via a cascading selection instead of free-text search,
+then preview as WMTS or download a GeoTIFF via the CDS API job queue.
+
+Tab 4 (Time Series): pick a point on the map canvas for the dataset/
 variable currently selected in Tab 2's search results, then fetch its
 value over time via one of two geobridge methods (radio buttons):
 
@@ -43,8 +49,12 @@ from datetime import timedelta
 
 from qgis.PyQt import uic
 from qgis.PyQt import QtWidgets
-from qgis.PyQt.QtCore import QDate, QDateTime, QPointF, QSize, Qt, QSettings, QTime, QTimer
-from qgis.PyQt.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
+from qgis.PyQt.QtCore import (
+    QDate, QDateTime, QPointF, QRectF, QSize, Qt, QSettings, QTime, QTimer, QUrl,
+)
+from qgis.PyQt.QtGui import (
+    QColor, QDesktopServices, QFont, QIcon, QPainter, QPainterPath, QPen, QPixmap,
+)
 from qgis.PyQt.QtWidgets import QFileDialog, QLineEdit, QMessageBox
 from qgis.core import (
     QgsApplication,
@@ -52,17 +62,21 @@ from qgis.core import (
     QgsCoordinateTransform,
     QgsProject,
     QgsRasterLayer,
+    QgsVectorLayer,
+    QgsWkbTypes,
 )
 from qgis.gui import QgsMapToolEmitPoint, QgsMapToolExtent
 
 from . import aoi_utils
 from . import export_utils
 from . import gb_wrapper
+from . import icons
 from . import time_utils
 from . import variable_labels
 from .browse_tab import BrowseTab
 from .dependency_installer import DependencyInstaller
 from .export_task import ExportTask
+from .legend_widget import VariableLegendWidget
 from .timeseries_task import TimeSeriesTask
 from .ts_plot_widget import TimeSeriesPlotWidget
 
@@ -75,6 +89,7 @@ FORM_CLASS, _ = uic.loadUiType(
 SETTINGS_PATH_CDS_CREDENTIAL = "GeoBridge/cds_credential"
 SETTINGS_KEY_LAST_EXPORT_DIR = "GeoBridge/last_export_dir"
 SETTINGS_KEY_LAST_TS_CSV_DIR = "GeoBridge/last_ts_csv_dir"
+DOCS_URL = "https://geobridge-qgis.readthedocs.io/en/latest/"
 PLAY_INTERVAL_MS = 2000
 PREFETCH_INTERVAL_MS = 150
 DEFAULT_WINDOW_DAYS = 3
@@ -147,6 +162,9 @@ def _eye_icon(crossed: bool) -> QIcon:
     return QIcon(pixmap)
 
 
+_info_icon = icons.info_icon
+
+
 def _rect_to_wgs84_bbox(rect, source_crs):
     """Convert a QgsRectangle in `source_crs` to a (west, south, east, north)
     tuple in WGS-84 degrees, matching geobridge's bbox convention."""
@@ -155,6 +173,41 @@ def _rect_to_wgs84_bbox(rect, source_crs):
         transform = QgsCoordinateTransform(source_crs, wgs84, QgsProject.instance())
         rect = transform.transformBoundingBox(rect)
     return (rect.xMinimum(), rect.yMinimum(), rect.xMaximum(), rect.yMaximum())
+
+
+class _SliderTickMarks(QtWidgets.QWidget):
+    """Tick marks below slider_time, redrawn to match its current range —
+    a replacement for QSlider's native TicksBelow rendering, which isn't
+    customizable: no Qt style (Fusion, Windows, ...) exposes a stylable
+    tick-mark subcontrol, so QSS can't restyle them at all. This draws its
+    own instead, one tick per slider step, in a light/muted weight.
+    """
+
+    def __init__(self, slider, parent=None):
+        super().__init__(parent)
+        self._slider = slider
+        slider.rangeChanged.connect(lambda *_args: self.update())
+
+    def paintEvent(self, event):  # noqa: N802 — Qt override
+        count = self._slider.maximum() - self._slider.minimum()
+        if count <= 0:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pen = QPen(self.palette().mid().color())
+        pen.setWidthF(1.0)
+        painter.setPen(pen)
+        # Approximates QSlider's own groove margin (half the handle width)
+        # so ticks roughly line up with where the handle actually stops —
+        # exact for typical Fusion/Windows handle sizes, a minor cosmetic
+        # approximation for others. Not worth QStyleOptionSlider precision
+        # for a purely visual tick bar.
+        margin = 8
+        width = max(self.width() - 2 * margin, 1)
+        for i in range(count + 1):
+            x = margin + width * i / count
+            painter.drawLine(QPointF(x, 0), QPointF(x, self.height()))
+        painter.end()
 
 
 class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
@@ -235,6 +288,71 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         self._populate_aggregation_combo()
         self._populate_ts_step_combo()
 
+        # Info icon next to the Step dropdown clarifying it's a sampling
+        # interval, not an aggregation — a common point of confusion given
+        # Export's separate Aggregation dropdown looks superficially
+        # similar. Parented to groupBox_time_range itself (not tab_search)
+        # since its geometry is relative to that group box's own origin,
+        # matching lbl_step/cmb_step's coordinate space.
+        self.lbl_step_info_icon = QtWidgets.QLabel(self.groupBox_time_range)
+        self.lbl_step_info_icon.setGeometry(250, 90, 18, 18)
+        self.lbl_step_info_icon.setPixmap(_info_icon(18))
+        self.lbl_step_info_icon.setToolTip(
+            "Step picks which individual timestamps to render as separate "
+            "layers — it is not an aggregation. Each layer shows the value "
+            "at that exact moment, not a value processed or averaged over "
+            "the interval. E.g. \"1 week\" shows one snapshot every 7 days; "
+            "the 6 days in between are skipped, not averaged in.\n\n"
+            "For an actual statistical reduction over a period (mean/max/"
+            "min), use Aggregation in the Export to GeoTIFF section instead."
+        )
+
+        # Info icon in the group box's own header, top-right corner (the
+        # title text "Area of interest" only occupies the left side of that
+        # strip, so this doesn't collide with it) — clarifies that AOI only
+        # scopes the Export to GeoTIFF download; "Build layers" (WMTS
+        # preview) never reads _search_aoi_bbox at all and always requests
+        # global tiles, cropped only by whatever the QGIS canvas happens to
+        # show on screen.
+        self.lbl_aoi_scope_info_icon = QtWidgets.QLabel(self.groupBox_aoi)
+        self.lbl_aoi_scope_info_icon.setGeometry(516, 3, 16, 16)
+        self.lbl_aoi_scope_info_icon.setPixmap(_info_icon(16))
+        self.lbl_aoi_scope_info_icon.setToolTip(
+            "This area only scopes the Export to GeoTIFF download below.\n\n"
+            "It has no effect on Build layers / the WMTS preview above — "
+            "that always fetches the entire globe; only what the QGIS map "
+            "canvas happens to be showing looks cropped."
+        )
+
+        # Info icon next to "Use extent" clarifying that a polygon layer's
+        # *rectangular bounding box* is what gets used, not the polygon's
+        # actual outline — CDS/ARCO requests are always a west/south/east/
+        # north rectangle, there is no "clip to this shape" concept on the
+        # request side. Squeezed into the ~20px gap left after
+        # btn_use_layer_extent inside groupBox_aoi's 540px width.
+        self.lbl_aoi_layer_info_icon = QtWidgets.QLabel(self.groupBox_aoi)
+        self.lbl_aoi_layer_info_icon.setGeometry(521, 105, 16, 16)
+        self.lbl_aoi_layer_info_icon.setPixmap(_info_icon(16))
+        self.lbl_aoi_layer_info_icon.setToolTip(
+            "Using a layer sets the area of interest to that layer's "
+            "rectangular bounding box — not the actual outline of its "
+            "polygon(s). An irregular region (e.g. a watershed or admin "
+            "boundary) will download data for the smallest rectangle that "
+            "fully contains it, so the result will extend beyond the "
+            "polygon's edges.\n\n"
+            "To keep only the pixels inside the polygon, clip the "
+            "exported GeoTIFF afterwards in QGIS (Raster → Extraction → "
+            "Clip Raster by Mask Layer), using this layer as the mask."
+        )
+
+        # Custom tick marks below slider_time — see _SliderTickMarks for why
+        # (QSlider's native ticks aren't stylable). slider_time's own height
+        # was trimmed from 30 to 22 in the .ui to make room for this 8px
+        # strip directly below it; lbl_current_time/btn_play were then
+        # moved down a bit further for breathing room from the ticks.
+        self._slider_ticks = _SliderTickMarks(self.slider_time, self.groupBox_time_range)
+        self._slider_ticks.setGeometry(10, 146, 520, 8)
+
         # Sane default range until a search result's own coverage narrows it
         now = QDateTime.currentDateTime()
         self.dt_ts_end.setDateTime(now)
@@ -262,16 +380,42 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         self.list_results.setColumnWidth(0, 70)
         self.list_results.setColumnWidth(1, 180)
         self.list_results.setColumnWidth(2, 190)
+        # Fixed rather than auto-stretched (horizontalHeaderStretchLastSection
+        # is off in the .ui): most variable codes are short ("t2m"), so
+        # letting this column consume all leftover table width looked
+        # oversized. A long code (some run 40+ chars, e.g.
+        # "Vapour_Pressure_Deficit_at_Maximum_Temperature") still elides with
+        # "…" rather than being cut off silently — hovering shows the full
+        # friendly name via the tooltip set in _populate_results regardless.
+        self.list_results.setColumnWidth(3, 90)
         self.list_results.currentCellChanged.connect(
             lambda cur_row, cur_col, prev_row, prev_col: self._on_result_selected(cur_row)
         )
         self.btn_draw_aoi.clicked.connect(self._on_draw_aoi_clicked)
         self.btn_use_layer_extent.clicked.connect(self._on_use_layer_extent_clicked)
+        self.rad_aoi_draw.toggled.connect(self._on_aoi_mode_changed)
+        self.rad_aoi_layer.toggled.connect(self._on_aoi_mode_changed)
+        self._on_aoi_mode_changed()
         self.btn_build_layers.clicked.connect(self._on_build_layers_clicked)
         self.slider_time.valueChanged.connect(self._show_time_step)
         self.btn_play.clicked.connect(self._toggle_play)
         self.btn_browse_output.clicked.connect(self._on_browse_output_clicked)
         self.btn_export_geotiff.clicked.connect(self._on_export_clicked)
+
+        # Legend for the WMTS preview's color scale — right column, upper
+        # part (above Export to GeoTIFF, which starts at y=120 in the .ui —
+        # the legend is relevant the moment a result is selected, before
+        # export settings even matter). Built in code, not the .ui, since
+        # it hosts a custom-painted widget rather than standard Designer
+        # widgets. Hidden via VariableLegendWidget itself until a result
+        # with WMTS + calibration data is selected.
+        self.groupBox_legend = QtWidgets.QGroupBox("Legend", self.tab_search)
+        self.groupBox_legend.setGeometry(570, 10, 540, 90)
+        legend_layout = QtWidgets.QVBoxLayout(self.groupBox_legend)
+        legend_layout.setContentsMargins(10, 14, 10, 10)
+        self.legend_widget = VariableLegendWidget(self.groupBox_legend)
+        legend_layout.addWidget(self.legend_widget)
+        self.legend_widget.set_style({})  # hidden until a result is selected
 
         # --- signals — Tab 3 (Time Series) ---
         self.btn_pick_point.toggled.connect(self._on_pick_point_toggled)
@@ -280,10 +424,44 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         self.rad_ts_quick.toggled.connect(self._on_ts_method_changed)
         self.rad_ts_zarr.toggled.connect(self._on_ts_method_changed)
 
-        # --- Tab 4 (Browse by Variable) — built in code, not the .ui ---
+        # Two-line "Selected dataset: <title>" / "variable <code> (<friendly
+        # name>)" block, plus a hoverable info icon clarifying that this tab
+        # has no dataset picker of its own; it always reflects whatever is
+        # currently selected on the Search tab. Built in code (not the .ui)
+        # since the .ui's absolute layout has no spare row for it; the rest
+        # of the tab is shifted down by _TS_LAYOUT_SHIFT to make room.
+        self.lbl_ts_selected = QtWidgets.QLabel(self.tab_timeseries)
+        self.lbl_ts_selected.setGeometry(10, 8, 470, 40)
+        self.lbl_ts_selected.setTextFormat(Qt.TextFormat.RichText)
+        self.lbl_ts_selected.setWordWrap(True)  # matches lbl_search_selection
+
+        self.lbl_ts_info_icon = QtWidgets.QLabel(self.tab_timeseries)
+        self.lbl_ts_info_icon.setGeometry(484, 10, 16, 16)
+        self.lbl_ts_info_icon.setPixmap(_info_icon())
+        self.lbl_ts_info_icon.setToolTip(
+            "This tab has no dataset picker of its own — it always uses "
+            "whatever dataset/variable is currently selected on the Search tab."
+        )
+
+        _TS_LAYOUT_SHIFT = 44
+        self.lbl_ts_hint.setGeometry(10, 52, 520, 34)
+        for _name in (
+            "lbl_ts_method", "rad_ts_quick", "rad_ts_zarr", "btn_pick_point",
+            "lbl_ts_coords", "lbl_ts_start", "dt_ts_start", "lbl_ts_end", "dt_ts_end",
+            "lbl_ts_step", "cmb_ts_step", "btn_ts_refresh",
+            "progress_ts", "lbl_ts_status", "plot_ts_container", "btn_ts_download_csv",
+        ):
+            _w = getattr(self, _name)
+            _w.move(_w.x(), _w.y() + _TS_LAYOUT_SHIFT)
+
+        # --- Browse by Variable — built in code, not the .ui. Inserted at
+        # index 2 (between Search and Time Series) rather than appended, so
+        # the visible tab order is API Key, Search, Browse by Variable,
+        # Time Series. Everything downstream (_tab_sizes, _apply_tab_size)
+        # keys off the widget itself rather than a hardcoded index, so this
+        # doesn't need any other change.
         self.browse_tab = BrowseTab(self)
-        self.tabWidget.addTab(self.browse_tab, "Browse by Variable")
-        self.browse_tab.previewRequested.connect(self._on_browse_preview)
+        self.tabWidget.insertTab(2, self.browse_tab, "Browse by Variable")
         self.browse_tab.downloadRequested.connect(self._on_browse_download)
         # The Browse tab's AOI widgets mirror the Search tab's layout, but
         # each tab keeps its own independent bbox — see _on_draw_aoi_clicked.
@@ -301,7 +479,10 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         self._default_size = QSize(700, 700)
         self._tab_sizes = {
             self.tab_auth: QSize(640, 360),
-            self.tab_search: QSize(700, 720),
+            # Wide enough for the two-column layout: results/AOI/time-range
+            # on the left (x=10, 540 wide), Export to GeoTIFF on the right
+            # (x=570, 540 wide) — see groupBox_export's geometry in the .ui.
+            self.tab_search: QSize(1140, 760),
             self.tab_timeseries: QSize(720, 700),
             self.browse_tab: QSize(1040, 780),
         }
@@ -314,6 +495,13 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         self.btn_close.setFixedSize(110, 30)
         self.btn_close.setToolTip("Close the GeoBridge window")
         self.btn_close.clicked.connect(self.close)
+
+        # Sits immediately left of Close, same strip — opens the plugin's
+        # Read the Docs site in the system's default browser.
+        self.btn_help = QtWidgets.QPushButton("Help", self)
+        self.btn_help.setFixedSize(110, 30)
+        self.btn_help.setToolTip("Open the GeoBridge documentation")
+        self.btn_help.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(DOCS_URL)))
 
         QgsProject.instance().cleared.connect(self._on_project_cleared)
         self._needs_reload = False
@@ -465,11 +653,31 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
 
     def _populate_step_combo(self):
         self.cmb_step.clear()
-        self.cmb_step.addItems(list(time_utils.STEP_CHOICES.keys()))
+        # itemData always holds the plain STEP_CHOICES key, even once
+        # _mark_raw_step_choice() below appends " (raw)" to an item's
+        # *displayed* text — every lookup against STEP_CHOICES must go
+        # through currentData(), never currentText(), so that suffix can
+        # never break the dict lookup in _on_build_layers_clicked.
+        for label in time_utils.STEP_CHOICES:
+            self.cmb_step.addItem(label, label)
 
     def _populate_aggregation_combo(self):
         self.cmb_aggregation.clear()
         self.cmb_aggregation.addItems(list(export_utils.AGGREGATION_LABELS.keys()))
+        # "Raw" (no aggregation — every timestep kept as its own band) is
+        # always a valid choice regardless of dataset, unlike the Search
+        # tab's Step dropdown's raw match — so this is a one-time static
+        # style, not something recomputed per dataset. Same bold-blue
+        # treatment as that dropdown's raw entry, for visual consistency;
+        # the label already says "Raw" so no extra "(raw)" suffix needed.
+        bold_font = QFont(self.cmb_aggregation.font())
+        bold_font.setBold(True)
+        for i in range(self.cmb_aggregation.count()):
+            if export_utils.AGGREGATION_LABELS[self.cmb_aggregation.itemText(i)] == "raw":
+                self.cmb_aggregation.setItemData(
+                    i, QColor("#2f6fed"), Qt.ItemDataRole.ForegroundRole
+                )
+                self.cmb_aggregation.setItemData(i, bold_font, Qt.ItemDataRole.FontRole)
 
     def _populate_ts_step_combo(self):
         self.cmb_ts_step.clear()
@@ -481,7 +689,7 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         if not query:
             return
         try:
-            matches = gb_wrapper.semantic_search(query, max_results=15)
+            matches = gb_wrapper.semantic_resources(query, max_results=15)
         except gb_wrapper.GeobridgeNotInstalled:
             QMessageBox.warning(self, "GeoBridge", "Install geobridge first (API Key tab).")
             return
@@ -497,6 +705,15 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         self.lbl_search_selection.setText("")
 
     def _populate_results(self, matches):
+        # clearContents() only clears item data — it does NOT reset cell
+        # spans set via setSpan() (Qt behavior, not a bug in our code). The
+        # "no matches" branch below spans row 0 across all 4 columns; without
+        # clearSpans() first, that span survives into the *next* search, so
+        # a search that follows a zero-result one renders its real row 0 as
+        # one merged cell — only the Confidence column visible, Use
+        # case/Dataset/Variable hidden underneath even though their item
+        # text is set correctly.
+        self.list_results.clearSpans()
         self.list_results.clearContents()
         if not matches:
             self.list_results.setRowCount(1)
@@ -506,10 +723,23 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
             self.list_results.setSpan(0, 0, 1, self.list_results.columnCount())
             return
 
+        # ResourceMatch.use_cases holds raw curated-use-case ids (often
+        # empty — most of this function's extra coverage over the older
+        # semantic_search() comes from TF-IDF catalog matches with no
+        # curated use case at all); resolve to labels once per search
+        # rather than per row, and fall back to "—" when there isn't one.
+        try:
+            uc_labels = gb_wrapper.use_case_labels()
+        except gb_wrapper.GeobridgeNotInstalled:
+            uc_labels = {}
+
         self.list_results.setRowCount(len(matches))
         for row, m in enumerate(matches):
+            use_case_text = (
+                ", ".join(uc_labels.get(uc, uc) for uc in m.use_cases) if m.use_cases else "—"
+            )
             self.list_results.setItem(row, 0, QtWidgets.QTableWidgetItem(f"{m.confidence:.2f}"))
-            self.list_results.setItem(row, 1, QtWidgets.QTableWidgetItem(m.use_case_label))
+            self.list_results.setItem(row, 1, QtWidgets.QTableWidgetItem(use_case_text))
             self.list_results.setItem(row, 2, QtWidgets.QTableWidgetItem(m.dataset_id))
             # Hovering the short variable code shows its readable name.
             var_item = QtWidgets.QTableWidgetItem(m.variable)
@@ -521,6 +751,7 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
             self.groupBox_time_range.setVisible(False)
             self.groupBox_export.setVisible(False)
             self.lbl_search_selection.setText("")
+            self.legend_widget.set_style({})
             return
 
         match = self._matches[row]
@@ -541,14 +772,27 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         if variable_labels.has_label(match.variable):
             variable_html += f" ({variable_labels.friendly_name(match.variable)})"
         self.lbl_search_selection.setText(
-            f"Selected: <b>{title}</b> &middot; variable {variable_html}"
+            f"Selected: <b>{title}</b>"
+            f"<br>variable {variable_html}"
             f" &nbsp; <a href=\"{url}\">Dataset details ↗</a>"
         )
 
         has_wmts = bool(descriptor and descriptor.has_wmts)
         self.groupBox_time_range.setVisible(has_wmts)
+        self._update_legend(descriptor, match, has_wmts)
 
         has_zarr = bool(descriptor and getattr(descriptor, "has_zarr", False))
+
+        # "Full history" on the Time Series tab (Tab 4) is a bulk ARCO Zarr
+        # read (gb_wrapper.zarr_point_time_series) — only meaningful for
+        # datasets that actually have a Zarr archive. Force back to "Quick"
+        # if the newly selected dataset doesn't support it and Full history
+        # was still checked, rather than leaving a disabled-but-checked
+        # radio.
+        self.rad_ts_zarr.setEnabled(has_zarr)
+        if not has_zarr and self.rad_ts_zarr.isChecked():
+            self.rad_ts_quick.setChecked(True)
+
         self.groupBox_export.setVisible(bool(descriptor))
         self.btn_export_geotiff.setEnabled(has_zarr)
         self.txt_output_path.clear()
@@ -559,6 +803,13 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
             )
         else:
             self.lbl_export_status.setText("")
+        # Unconditional on has_zarr/descriptor, not has_wmts (unlike
+        # _mark_raw_step_choice below) — the Export section, and so this
+        # marking, is relevant for zarr-only datasets with no WMTS preview
+        # too, which return early below before ever reaching that call.
+        self._mark_raw_aggregation_choice(descriptor)
+        self._disable_finer_than_native_aggregations(descriptor)
+        self._move_to_nearest_enabled(self.cmb_aggregation)
 
         # Seed a sane start/end regardless of WMTS support — export (below)
         # uses these same fields even for a has_zarr-but-no-WMTS dataset.
@@ -580,25 +831,236 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         if not has_wmts:
             return
 
+        self._mark_raw_step_choice(descriptor)
+        self._disable_finer_than_native_steps(descriptor)
         default_label = time_utils.default_step_choice(getattr(descriptor, "time_step", ""))
-        index = self.cmb_step.findText(default_label)
+        index = self.cmb_step.findData(default_label)
         if index >= 0:
             self.cmb_step.setCurrentIndex(index)
+        self._move_to_nearest_enabled(self.cmb_step)
+
+    # geobridge's LayerDescriptor.time_step is a single string, but some
+    # datasets (e.g. CORDEX — "3h, 6h, daily, monthly and seasonal" per its
+    # own CDS documentation) genuinely offer several native frequencies;
+    # geobridge's snapshot can only record one of them. So a "(raw)" match
+    # here means "matches geobridge's recorded resolution", not
+    # necessarily "the only native resolution this dataset has".
+    _RAW_STEP_TOOLTIP = (
+        "Matches geobridge's recorded native resolution for this dataset. "
+        "Some datasets offer multiple native frequencies (e.g. CORDEX: "
+        "3h, 6h, daily, monthly, seasonal) — geobridge's catalogue records "
+        "only one of them, so this may not be the only genuinely raw option."
+    )
+
+    def _mark_raw_step_choice(self, descriptor):
+        """Flag whichever cmb_step entry matches the dataset's raw time_step
+        exactly (not just the closest one, unlike default_step_choice) with
+        an "(raw)" suffix in bold blue — every other choice for that
+        dataset involves resampling from its native resolution, and stays
+        plain (never bold/colored) so the flagged entry actually stands out
+        rather than just being one of several styled items."""
+        raw_time_step = getattr(descriptor, "time_step", "") if descriptor else ""
+        raw_label = time_utils.exact_step_choice(raw_time_step)
+        bold_font = QFont(self.cmb_step.font())
+        bold_font.setBold(True)
+        for i in range(self.cmb_step.count()):
+            label = self.cmb_step.itemData(i)
+            if label == raw_label:
+                self.cmb_step.setItemText(i, f"{label} (raw)")
+                self.cmb_step.setItemData(i, QColor("#2f6fed"), Qt.ItemDataRole.ForegroundRole)
+                self.cmb_step.setItemData(i, bold_font, Qt.ItemDataRole.FontRole)
+                self.cmb_step.setItemData(i, self._RAW_STEP_TOOLTIP, Qt.ItemDataRole.ToolTipRole)
+            else:
+                self.cmb_step.setItemText(i, label)
+                self.cmb_step.setItemData(i, None, Qt.ItemDataRole.ForegroundRole)
+                self.cmb_step.setItemData(i, None, Qt.ItemDataRole.FontRole)
+                self.cmb_step.setItemData(i, None, Qt.ItemDataRole.ToolTipRole)
+
+    _FINER_THAN_NATIVE_TOOLTIP = (
+        "Disabled — finer than this dataset's native resolution. There is "
+        "no real data at this interval; the value shown would just be the "
+        "same native sample repeated, not something actually varying at "
+        "this granularity."
+    )
+
+    def _disable_finer_than_native_steps(self, descriptor):
+        """Grey out cmb_step entries strictly finer than the dataset's
+        native time_step — e.g. a monthly-native dataset has no real
+        hourly/daily/weekly data, so picking one of those just repeats the
+        same monthly value. Call *after* _mark_raw_step_choice, since that
+        method resets ToolTipRole on every non-raw entry and would
+        otherwise wipe the tooltip this sets on disabled ones.
+
+        Never disables anything when the native step can't be parsed (see
+        time_utils.finer_than_native_steps) — includes multi-frequency
+        datasets like CORDEX, where geobridge's single recorded time_step
+        may not be the only genuinely native resolution (same caveat as
+        _RAW_STEP_TOOLTIP above)."""
+        raw_time_step = getattr(descriptor, "time_step", "") if descriptor else ""
+        finer_labels = time_utils.finer_than_native_steps(raw_time_step)
+        model = self.cmb_step.model()
+        for i in range(self.cmb_step.count()):
+            disabled = self.cmb_step.itemData(i) in finer_labels
+            model.item(i).setEnabled(not disabled)
+            if disabled:
+                self.cmb_step.setItemData(
+                    i, self._FINER_THAN_NATIVE_TOOLTIP, Qt.ItemDataRole.ToolTipRole
+                )
+
+    @staticmethod
+    def _move_to_nearest_enabled(combo):
+        """If combo's current item just got disabled, move to the nearest
+        still-enabled one. Searches coarser (later in the list) first —
+        disabled entries are always the finer ones earlier in the list
+        (see _disable_finer_than_native_steps/_aggregations), so a later
+        entry is always guaranteed to exist and be enabled."""
+        model = combo.model()
+        idx = combo.currentIndex()
+        if idx < 0 or model.item(idx).isEnabled():
+            return
+        for i in range(idx + 1, combo.count()):
+            if model.item(i).isEnabled():
+                combo.setCurrentIndex(i)
+                return
+        for i in range(idx - 1, -1, -1):
+            if model.item(i).isEnabled():
+                combo.setCurrentIndex(i)
+                return
+
+    # Aggregation choices whose interval, if it exactly matches the
+    # dataset's native time_step, means that choice performs no real
+    # averaging at all — same underlying time_utils.exact_step_choice()
+    # check as cmb_step above, just against export_utils's aggregation
+    # keys instead of STEP_CHOICES labels directly. "raw" itself is
+    # excluded here — it's unconditionally the true native data regardless
+    # of cadence, and is already always marked in _populate_aggregation_combo.
+    # Only the *_mean choices get flagged — max/min are a genuinely
+    # different statistic even when there's only one native sample a day
+    # (max-of-one and min-of-one both trivially equal that one value, same
+    # as mean-of-one, but flagging all three blue at once for a daily
+    # dataset read as confusing/redundant rather than informative).
+    _AGGREGATION_STEP_EQUIVALENT = {
+        "daily_mean": "1 day",
+        "monthly_mean": "1 month",
+        "annual_mean": "1 year",
+    }
+
+    def _mark_raw_aggregation_choice(self, descriptor):
+        """Flag "Daily mean"/"Monthly mean" too when they exactly match the
+        dataset's native time_step — e.g. a dataset that's already natively
+        daily gains nothing from "Daily mean" over "Raw", since there's
+        only one native sample per day to begin with."""
+        raw_time_step = getattr(descriptor, "time_step", "") if descriptor else ""
+        exact_label = time_utils.exact_step_choice(raw_time_step)
+        bold_font = QFont(self.cmb_aggregation.font())
+        bold_font.setBold(True)
+        for i in range(self.cmb_aggregation.count()):
+            key = export_utils.AGGREGATION_LABELS[self.cmb_aggregation.itemText(i)]
+            if key == "raw":
+                continue  # always marked in _populate_aggregation_combo; never reset here
+            if self._AGGREGATION_STEP_EQUIVALENT.get(key) == exact_label:
+                self.cmb_aggregation.setItemData(
+                    i, QColor("#2f6fed"), Qt.ItemDataRole.ForegroundRole
+                )
+                self.cmb_aggregation.setItemData(i, bold_font, Qt.ItemDataRole.FontRole)
+                self.cmb_aggregation.setItemData(
+                    i, self._RAW_STEP_TOOLTIP, Qt.ItemDataRole.ToolTipRole
+                )
+            else:
+                self.cmb_aggregation.setItemData(i, None, Qt.ItemDataRole.ForegroundRole)
+                self.cmb_aggregation.setItemData(i, None, Qt.ItemDataRole.FontRole)
+                self.cmb_aggregation.setItemData(i, None, Qt.ItemDataRole.ToolTipRole)
+
+    # Granularity of each non-raw aggregation key, in seconds — same
+    # buckets as _AGGREGATION_STEP_EQUIVALENT's labels, just expressed as
+    # a duration so every mean/max/min variant of a granularity can be
+    # compared against the dataset's native step, not only the *_mean one.
+    _AGGREGATION_GRANULARITY_SECONDS = {
+        "daily_mean": 86400,
+        "daily_max": 86400,
+        "daily_min": 86400,
+        "monthly_mean": 30 * 86400,
+        "monthly_max": 30 * 86400,
+        "monthly_min": 30 * 86400,
+        "annual_mean": 365 * 86400,
+        "annual_max": 365 * 86400,
+    }
+
+    def _disable_finer_than_native_aggregations(self, descriptor):
+        """Grey out Aggregation entries strictly finer than the dataset's
+        native time_step, mirroring _disable_finer_than_native_steps —
+        e.g. a monthly-native dataset has no daily data to average, so
+        "Daily mean/max/min" are disabled. "raw" is never disabled — it's
+        always valid regardless of cadence. Call after
+        _mark_raw_aggregation_choice for the same tooltip-ordering reason."""
+        raw_time_step = getattr(descriptor, "time_step", "") if descriptor else ""
+        native_seconds = time_utils.native_step_seconds(raw_time_step)
+        model = self.cmb_aggregation.model()
+        for i in range(self.cmb_aggregation.count()):
+            key = export_utils.AGGREGATION_LABELS[self.cmb_aggregation.itemText(i)]
+            granularity_secs = self._AGGREGATION_GRANULARITY_SECONDS.get(key)
+            disabled = (
+                key != "raw"
+                and native_seconds is not None
+                and granularity_secs is not None
+                and granularity_secs < native_seconds
+            )
+            model.item(i).setEnabled(not disabled)
+            if disabled:
+                self.cmb_aggregation.setItemData(
+                    i, self._FINER_THAN_NATIVE_TOOLTIP, Qt.ItemDataRole.ToolTipRole
+                )
+
+    def _update_legend(self, descriptor, match, has_wmts):
+        """Refresh the WMTS color-scale legend for the newly selected
+        result — hidden when there's no WMTS preview to show a scale for,
+        or no ARCO calibration data (e.g. a CDS-only dataset)."""
+        if not has_wmts:
+            self.legend_widget.set_style({})
+            return
+        style = gb_wrapper.variable_style(match.dataset_id, match.variable)
+        label = match.variable
+        if variable_labels.has_label(match.variable):
+            label += f" ({variable_labels.friendly_name(match.variable)})"
+        self.legend_widget.set_style(style, variable_label=label)
 
     # ------------------------------------------------------------------ #
     # Area of interest — shared "draw on map" tool, independent bboxes per
-    # tab (Search / Tab 2 and Browse by Variable / Tab 4)
+    # tab (Search / Tab 2 and Browse by Variable / Tab 3)
     # ------------------------------------------------------------------ #
 
     def _refresh_aoi_layer_combo(self):
         combos = [self.cmb_aoi_layer]
         if hasattr(self, "browse_tab"):
             combos.append(self.browse_tab.cmb_aoi_layer)
-        layers = list(QgsProject.instance().mapLayers().values())
+        # Polygon vector layers only — "use extent" from a raster (e.g. this
+        # plugin's own WMTS preview layers) or a point/line layer is
+        # technically possible but essentially never what "area of
+        # interest" actually means; this keeps the dropdown to layers where
+        # picking one is a meaningful choice.
+        layers = [
+            layer
+            for layer in QgsProject.instance().mapLayers().values()
+            if isinstance(layer, QgsVectorLayer)
+            and QgsWkbTypes.geometryType(layer.wkbType()) == QgsWkbTypes.GeometryType.PolygonGeometry
+        ]
         for combo in combos:
             combo.clear()
             for layer in layers:
                 combo.addItem(layer.name(), layer.id())
+
+    def _on_aoi_mode_changed(self):
+        """Grey out whichever AOI method isn't selected via the radio
+        buttons. Both control sets stay visible rather than being hidden —
+        groupBox_aoi uses absolute positioning (no layout to reflow into
+        the gap hiding one would leave), and leaving both visible-but-one-
+        disabled also means the other method stays discoverable at a
+        glance instead of vanishing behind a mode toggle."""
+        draw_mode = self.rad_aoi_draw.isChecked()
+        self.btn_draw_aoi.setEnabled(draw_mode)
+        self.lbl_aoi_layer.setEnabled(not draw_mode)
+        self.cmb_aoi_layer.setEnabled(not draw_mode)
+        self.btn_use_layer_extent.setEnabled(not draw_mode)
 
     def _on_draw_aoi_clicked(self):
         self._start_aoi_draw("search")
@@ -625,6 +1087,14 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         # This also rules out the other tab's own "Draw on map" button being
         # clicked mid-draw, since the whole dialog (both tabs) is hidden.
         self.hide()
+        # Bring QGIS's own main window to the front — hiding this dialog
+        # alone doesn't guarantee the canvas is what's actually on top if
+        # some other window/app was in front of QGIS itself, which would
+        # otherwise leave the user needing to click over to QGIS manually
+        # before they could actually draw anything.
+        main_window = self.iface.mainWindow()
+        main_window.raise_()
+        main_window.activateWindow()
         self.iface.messageBar().pushInfo(
             "GeoBridge", "Drag a rectangle on the map to set the area of interest."
         )
@@ -633,7 +1103,7 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         canvas = self.iface.mapCanvas()
         source_crs = canvas.mapSettings().destinationCrs()
         bbox = _rect_to_wgs84_bbox(rect, source_crs)
-        self._set_aoi_bbox(bbox, self._aoi_target or "search")
+        self._set_aoi_bbox(bbox, self._aoi_target or "search", "Drawn on map")
         if self._previous_map_tool is not None:
             canvas.setMapTool(self._previous_map_tool)
             self._previous_map_tool = None
@@ -659,19 +1129,27 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
             QMessageBox.warning(self, "GeoBridge", "Selected layer is no longer available.")
             return
         bbox = _rect_to_wgs84_bbox(layer.extent(), layer.crs())
-        self._set_aoi_bbox(bbox, target)
+        self._set_aoi_bbox(bbox, target, f"From layer: {layer.name()}")
 
-    def _set_aoi_bbox(self, bbox, target):
+    def _set_aoi_bbox(self, bbox, target, source):
         """Store `bbox` for `target` ("search" or "browse") only — the two
         tabs' areas of interest are independent, so this never touches the
-        other tab's stored bbox or displayed label."""
+        other tab's stored bbox or displayed label.
+
+        `source` ("Drawn on map" / "From layer: <name>") is prefixed onto
+        the displayed text so it's always clear *how* the current area was
+        set — drawing then later fiddling with the layer combo (without
+        clicking "Use extent") previously left no way to tell which one was
+        actually still in effect, since both actions just updated the same
+        coordinates with no indication of where they came from.
+        """
         if target == "browse":
             self._browse_aoi_bbox = bbox
             lbl_bbox, lbl_warn = self.browse_tab.lbl_aoi_bbox, self.browse_tab.lbl_aoi_warning
         else:
             self._search_aoi_bbox = bbox
             lbl_bbox, lbl_warn = self.lbl_aoi_bbox, self.lbl_aoi_warning
-        text = aoi_utils.format_bbox(bbox)
+        text = f"{source} — {aoi_utils.format_bbox(bbox)}"
         warning = aoi_utils.validate_bbox_size(bbox)
         lbl_bbox.setText(text)
         lbl_warn.setText(warning or "")
@@ -683,7 +1161,7 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
 
         start = self.dt_start.dateTime().toPyDateTime()
         end = self.dt_end.dateTime().toPyDateTime()
-        step = time_utils.STEP_CHOICES[self.cmb_step.currentText()]
+        step = time_utils.STEP_CHOICES[self.cmb_step.currentData()]
 
         try:
             steps = time_utils.generate_time_steps(start, end, step)
@@ -718,38 +1196,6 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
             return
 
         self._load_wmts_layers()
-
-    def _on_browse_preview(self, payload):
-        """Build a single WMTS preview layer from a Browse-by-Variable pick.
-
-        Reuses Tab 2's WMTS build/load path (build_wmts_layer_configs +
-        _load_wmts_layers) for one timestamp, so a browsed selection lands
-        on the map exactly like a search result's first time step.
-        """
-        try:
-            self._layer_configs = gb_wrapper.build_wmts_layer_configs(
-                payload["dataset_id"],
-                payload["variable"],
-                [payload["datetime"]],
-                descriptor=payload.get("descriptor"),
-            )
-        except gb_wrapper.GeobridgeNotInstalled:
-            QMessageBox.warning(self, "GeoBridge", "Install geobridge first (API Key tab).")
-            return
-        except Exception as exc:
-            QMessageBox.warning(self, "GeoBridge", f"Could not build preview layer: {exc}")
-            return
-
-        self._load_wmts_layers(group_label=payload["dataset_id"])
-        if self._layer_ids:
-            self.browse_tab.lbl_status.setText(
-                f"Preview layer added: {payload['variable']} @ {payload['datetime']}"
-            )
-        else:
-            self.browse_tab.lbl_status.setText(
-                "Layer failed to load — check your connection and that this "
-                "variable has a WMTS layer."
-            )
 
     def _on_browse_download(self, payload):
         """Download a Browse-by-Variable selection as a GeoTIFF via the CDS API.
@@ -1051,22 +1497,37 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
 
     def _refresh_ts_hint(self):
         if self._current_match is None:
+            self.lbl_ts_selected.setText("")
+            self.lbl_ts_info_icon.setVisible(False)
             self.lbl_ts_hint.setText(
                 'Pick a dataset/variable in the Search tab first, then click '
                 '"Pick point on map" and click anywhere on the map canvas.'
             )
             return
 
-        base = (
-            f"Dataset: {self._current_match.dataset_id} / "
-            f"{self._current_match.variable} — click \"Pick point on map\" "
-            "then click anywhere on the map canvas."
+        # Same title/friendly-variable info as the Search tab's own
+        # selection line, but on two lines here — the dataset title alone
+        # can be long enough that cramming the variable onto the same line
+        # crowds this tab's narrower layout.
+        title = getattr(self._current_descriptor, "title", None) or self._current_match.dataset_id
+        variable = self._current_match.variable
+        variable_html = f"<b>{variable}</b>"
+        if variable_labels.has_label(variable):
+            variable_html += f" ({variable_labels.friendly_name(variable)})"
+        self.lbl_ts_selected.setText(
+            f"Selected dataset: <b>{title}</b><br>variable {variable_html}"
         )
-        if self._ts_method() == "zarr":
-            note = " Full history needs geobridge[zarr] installed and an authenticated CDS API key (API Key tab)."
-        else:
-            note = " Quick mode works without auth; keep ranges to a few dozen/hundred steps."
-        self.lbl_ts_hint.setText(base + note)
+        self.lbl_ts_info_icon.setVisible(True)
+
+        note = (
+            "Full history needs geobridge[zarr] installed and an authenticated "
+            "CDS API key (API Key tab)."
+            if self._ts_method() == "zarr" else
+            "Quick mode works without auth; keep ranges to a few dozen/hundred steps."
+        )
+        self.lbl_ts_hint.setText(
+            'Click "Pick point on map" then click anywhere on the map canvas. ' + note
+        )
 
     def _on_pick_point_toggled(self, checked: bool):
         canvas = self.iface.mapCanvas()
@@ -1209,7 +1670,16 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         self.progress_ts.setRange(0, 100)
         self._ts_samples = self._ts_task.samples or []
         self._ts_task = None  # done — nothing left to ever .cancel()
-        self.plot_ts.set_samples(self._ts_samples)
+        # Not descriptor.colormap['unit'] — that's dataset-level (only the
+        # dataset's *first* variable's unit, e.g. reanalysis_era5_single_
+        # levels' is "blh"/"m"), wrong for whichever variable is actually
+        # selected. gb_wrapper.variable_unit() looks up this specific one.
+        unit = ""
+        if self._current_match is not None:
+            unit = gb_wrapper.variable_unit(
+                self._current_match.dataset_id, self._current_match.variable
+            )
+        self.plot_ts.set_samples(self._ts_samples, unit=unit)
         self.lbl_ts_status.setText(f"Done: {len(self._ts_samples)} point(s).")
         self.btn_ts_download_csv.setEnabled(bool(self._ts_samples))
 
@@ -1269,11 +1739,18 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
             max(0, w - 2 * margin),
             max(0, h - 2 * margin - bottom_strip),
         )
-        if hasattr(self, "btn_close"):
-            bw, bh = self.btn_close.width(), self.btn_close.height()
-            x = (w - bw) // 2                 # centred along the bottom
-            y = h - margin - bh
-            self.btn_close.move(max(margin, x), max(margin, y))
+        if hasattr(self, "btn_close") and hasattr(self, "btn_help"):
+            gap = 10
+            cw, ch = self.btn_close.width(), self.btn_close.height()
+            hw, hh = self.btn_help.width(), self.btn_help.height()
+            total_w = hw + gap + cw
+            start_x = (w - total_w) // 2      # pair centred along the bottom
+            y = h - margin - max(ch, hh)
+            help_x = max(margin, start_x)
+            close_x = help_x + hw + gap
+            self.btn_help.move(help_x, max(margin, y))
+            self.btn_close.move(close_x, max(margin, y))
+            self.btn_help.raise_()
             self.btn_close.raise_()
 
     def _apply_tab_size(self, index):

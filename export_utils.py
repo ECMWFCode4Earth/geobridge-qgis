@@ -11,12 +11,23 @@ from __future__ import annotations
 
 from typing import Optional
 
-# Display label -> geobridge aggregation string (see
-# geobridge/modules/extract.py's zarr_to_geotiff `aggregation` parameter).
+# Display label -> geobridge aggregation string. Mirrors every value
+# geobridge.zarr_to_geotiff's `aggregation` parameter actually accepts
+# (see geobridge/modules/extract.py) — the granularity ladder (daily/
+# monthly/annual) matches the Time range tab's Step dropdown, just
+# expressed as an aggregation rather than a WMTS render interval; mean/
+# max/min are a separate axis (which statistic to reduce with). There is
+# no "annual_min" — geobridge itself doesn't offer that combination.
 AGGREGATION_LABELS = {
     "Raw (all timesteps as bands)": "raw",
     "Daily mean": "daily_mean",
+    "Daily max": "daily_max",
+    "Daily min": "daily_min",
     "Monthly mean": "monthly_mean",
+    "Monthly max": "monthly_max",
+    "Monthly min": "monthly_min",
+    "Annual mean": "annual_mean",
+    "Annual max": "annual_max",
 }
 
 # "Raw" keeps every timestep as a separate band in one file. Past this many

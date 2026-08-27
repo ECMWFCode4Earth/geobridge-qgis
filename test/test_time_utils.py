@@ -9,8 +9,10 @@ from time_utils import (
     STEP_CHOICES,
     TooManyStepsError,
     default_step_choice,
+    finer_than_native_steps,
     generate_time_steps,
     iso_from_parts,
+    native_step_seconds,
 )
 
 
@@ -94,3 +96,37 @@ def test_iso_from_parts_with_time():
 def test_iso_from_parts_rejects_impossible_date():
     with pytest.raises(ValueError):
         iso_from_parts("2023", "02", "30")  # Feb 30 doesn't exist
+
+
+def test_native_step_seconds_parses_known_forms():
+    assert native_step_seconds("1h") == 3600
+    assert native_step_seconds("month") == 30 * 86400
+    assert native_step_seconds("year") == 365 * 86400
+
+
+def test_native_step_seconds_none_for_unparseable():
+    assert native_step_seconds("") is None
+    assert native_step_seconds("nonperiodic") is None
+    assert native_step_seconds("nonsense") is None
+
+
+def test_finer_than_native_steps_monthly_dataset():
+    finer = finer_than_native_steps("month")
+    assert finer == {"1 hour", "3 hours", "6 hours", "1 day", "1 week"}
+    assert "1 month" not in finer  # exact match, not finer
+    assert "1 year" not in finer  # coarser, not finer
+
+
+def test_finer_than_native_steps_hourly_dataset_disables_nothing():
+    # 1 hour is already the finest offered choice — nothing is finer.
+    assert finer_than_native_steps("1h") == set()
+
+
+def test_finer_than_native_steps_unparseable_disables_nothing():
+    assert finer_than_native_steps("") == set()
+    assert finer_than_native_steps("nonperiodic") == set()
+
+
+def test_finer_than_native_steps_daily_dataset():
+    finer = finer_than_native_steps("day")
+    assert finer == {"1 hour", "3 hours", "6 hours"}

@@ -15,7 +15,7 @@ from qgis.PyQt.QtCore import QPointF, QRectF, Qt
 from qgis.PyQt.QtGui import QColor, QPainter, QPen
 from qgis.PyQt.QtWidgets import QWidget
 
-_MARGIN_LEFT = 60
+_MARGIN_LEFT = 78  # wide enough for "<value> <unit>" (e.g. "0.0234 kg/m³")
 _MARGIN_RIGHT = 12
 _MARGIN_TOP = 14
 _MARGIN_BOTTOM = 26
@@ -33,10 +33,12 @@ class TimeSeriesPlotWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._samples = []
+        self._unit = ""
         self.setMinimumHeight(120)
 
-    def set_samples(self, samples):
+    def set_samples(self, samples, unit: str = ""):
         self._samples = samples or []
+        self._unit = unit or ""
         self.update()
 
     def paintEvent(self, event):  # noqa: N802 — Qt override
@@ -80,13 +82,16 @@ class TimeSeriesPlotWidget(QWidget):
 
         text_pen = QPen(self.palette().text().color())
         painter.setPen(text_pen)
+        unit_suffix = f" {self._unit}" if self._unit else ""
         painter.drawText(
             QRectF(0, plot_rect.top() - 8, _MARGIN_LEFT - 6, 16),
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, f"{v_max:.3g}",
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+            f"{v_max:.3g}{unit_suffix}",
         )
         painter.drawText(
             QRectF(0, plot_rect.bottom() - 8, _MARGIN_LEFT - 6, 16),
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, f"{v_min:.3g}",
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+            f"{v_min:.3g}{unit_suffix}",
         )
         painter.drawText(
             QRectF(plot_rect.left(), plot_rect.bottom() + 4, 160, 20),

@@ -2,7 +2,7 @@
 name=GeoBridge
 qgisMinimumVersion=3.28
 description=Discover, semantically search, and preview Copernicus climate data (ERA5, CAMS, CEMS) as WMTS layers directly in QGIS, powered by the geobridge Python library.
-version=0.1.10
+version=0.1.11
 author=GeoBridge contributors
 email=iliasmachairas@outlook.com
 
@@ -14,7 +14,8 @@ repository=https://github.com/ECMWFCode4Earth/geobridge-qgis
 tracker=https://github.com/ECMWFCode4Earth/geobridge-qgis/issues
 
 hasProcessingProvider=no
-changelog=0.1.10 Add a show/hide eye icon inside the API Key field (masked by default) so you can check what you typed before saving.
+changelog=0.1.11 Search tab: add a per-variable color-scale legend and a Help button linking to the documentation site; Step and Aggregation dropdowns now grey out choices finer than a dataset's native time resolution (not just flag the exact match); Time Series Y-axis now shows units; area of interest gets independent Draw-on-map/From-layer controls (polygon layers only), a source-tagged bbox display, and info icons clarifying it's a bounding box (not a polygon clip) that only scopes Export to GeoTIFF, not the WMTS preview. Browse by Variable tab: auto-fill dataset-specific required CDS fields (e.g. reference_dataset/version) that the fixed field cascade doesn't cover, fixing CDS 400 rejections on datasets like derived-near-surface-meteorological-variables; same area-of-interest controls as the Search tab. Export to GeoTIFF aggregation now offers daily/monthly/annual max and min alongside mean. Docs: add a full illustrated walkthrough for creating a CDS API key.
+    0.1.10 Add a show/hide eye icon inside the API Key field (masked by default) so you can check what you typed before saving.
     0.1.9 Browse by Variable tab now lists only datasets present in geobridge's cds_snapshot.yaml catalogue, dropping ARCO-only entries with no CDS catalogue backing (142 -> 136 datasets on the current geobridge version).
     0.1.8 Add Sphinx documentation (docs/, ready for Read the Docs) covering installation and each tab, with screenshots. Docs source is excluded from the shipped plugin zip, same as build_plugin.sh and test/.
     0.1.7 Fix area-of-interest bleed-through between the Search tab and Browse-by-Variable tab: they shared a single bbox, so drawing/selecting an area in one tab silently overwrote what the other tab would export/download. Each tab now keeps its own independent area of interest.

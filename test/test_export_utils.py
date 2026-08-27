@@ -11,7 +11,14 @@ from export_utils import (
 def test_aggregation_labels_map_to_geobridge_strings():
     assert AGGREGATION_LABELS["Raw (all timesteps as bands)"] == "raw"
     assert AGGREGATION_LABELS["Daily mean"] == "daily_mean"
+    assert AGGREGATION_LABELS["Daily max"] == "daily_max"
+    assert AGGREGATION_LABELS["Daily min"] == "daily_min"
     assert AGGREGATION_LABELS["Monthly mean"] == "monthly_mean"
+    assert AGGREGATION_LABELS["Monthly max"] == "monthly_max"
+    assert AGGREGATION_LABELS["Monthly min"] == "monthly_min"
+    assert AGGREGATION_LABELS["Annual mean"] == "annual_mean"
+    assert AGGREGATION_LABELS["Annual max"] == "annual_max"
+    assert "Annual min" not in AGGREGATION_LABELS  # geobridge has no such option
 
 
 def test_default_output_filename():

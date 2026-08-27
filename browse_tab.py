@@ -15,15 +15,16 @@ manager, so this widget carries its own.
 
 All the decision logic lives in gb_wrapper as pure, unit-tested functions;
 this file is only the Qt glue that paints their output and reads the user's
-selections back. It emits `previewRequested` with a payload dict when the
-user asks to preview the current selection as a WMTS layer; the dialog
-connects that to its existing WMTS layer-building path.
+selections back. It emits `downloadRequested` with a payload dict when the
+user asks to download the current selection as a GeoTIFF; the dialog
+connects that to its CDS-API export path.
 """
 
 from __future__ import annotations
 
 from qgis.PyQt.QtCore import Qt, pyqtSignal
 from qgis.PyQt.QtWidgets import (
+    QButtonGroup,
     QComboBox,
     QGridLayout,
     QGroupBox,
@@ -33,12 +34,13 @@ from qgis.PyQt.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
+    QRadioButton,
     QVBoxLayout,
     QWidget,
 )
 
 from . import gb_wrapper
-from . import time_utils
+from . import icons
 
 # Cascade order is only cosmetic (upstream-ish first); the grey-out maths
 # is order-independent because each field is evaluated against all the
@@ -60,9 +62,6 @@ FIELD_LABELS = {
     "time": "Time",
 }
 
-# Fields needed to pin a single timestamp for a WMTS preview.
-_DATETIME_FIELDS = ("year", "month", "day")
-
 # Keep a list item's selection visibly blue even when the list doesn't have
 # keyboard focus — Qt otherwise fades it to grey the moment you click another
 # list, which made the current pick hard to spot while scrolling.
@@ -75,7 +74,6 @@ _LIST_QSS = (
 class BrowseTab(QWidget):
     """Dataset → variable → date cascade with live constraint-driven greying."""
 
-    previewRequested = pyqtSignal(object)   # payload dict (see _on_preview_clicked)
     downloadRequested = pyqtSignal(object)  # payload dict (see _on_download_clicked)
 
     def __init__(self, parent=None):
@@ -199,14 +197,61 @@ class BrowseTab(QWidget):
         aoi_box = QGroupBox("Area of interest (optional)")
         aoi_layout = QVBoxLayout(aoi_box)
         aoi_layout.setSpacing(10)
-        aoi_layout.setContentsMargins(12, 14, 12, 14)
+        aoi_layout.setContentsMargins(12, 26, 12, 14)
+
+        aoi_mode_row = QHBoxLayout()
+        self.rad_aoi_draw = QRadioButton("Draw on map")
+        self.rad_aoi_draw.setChecked(True)
+        self.rad_aoi_layer = QRadioButton("From layer")
+        aoi_mode_row.addWidget(self.rad_aoi_draw)
+        aoi_mode_row.addWidget(self.rad_aoi_layer)
+        aoi_mode_row.addStretch(1)
+        aoi_layout.addLayout(aoi_mode_row)
+        self._aoi_mode_group = QButtonGroup(self)
+        self._aoi_mode_group.addButton(self.rad_aoi_draw)
+        self._aoi_mode_group.addButton(self.rad_aoi_layer)
+
         self.btn_draw_aoi = QPushButton("Draw on map")
         aoi_layout.addWidget(self.btn_draw_aoi)
-        aoi_layout.addWidget(QLabel("or from layer:"))
+
+        aoi_layer_caption_row = QHBoxLayout()
+        self.lbl_aoi_layer_caption = QLabel("Layer:")
+        aoi_layer_caption_row.addWidget(self.lbl_aoi_layer_caption)
+        # Clarifies that the layer's rectangular bounding box is used, not
+        # its polygon outline — same wording as the Search tab's matching
+        # icon (geobridge_plugin_dialog.py's lbl_aoi_layer_info_icon).
+        self.lbl_aoi_layer_info_icon = QLabel()
+        self.lbl_aoi_layer_info_icon.setPixmap(icons.info_icon(16))
+        self.lbl_aoi_layer_info_icon.setToolTip(
+            "Using a layer sets the area of interest to that layer's "
+            "rectangular bounding box — not the actual outline of its "
+            "polygon(s). An irregular region (e.g. a watershed or admin "
+            "boundary) will download data for the smallest rectangle that "
+            "fully contains it, so the result will extend beyond the "
+            "polygon's edges.\n\n"
+            "To keep only the pixels inside the polygon, clip the "
+            "exported GeoTIFF afterwards in QGIS (Raster → Extraction → "
+            "Clip Raster by Mask Layer), using this layer as the mask."
+        )
+        aoi_layer_caption_row.addWidget(self.lbl_aoi_layer_info_icon)
+        aoi_layer_caption_row.addStretch(1)
+        aoi_layout.addLayout(aoi_layer_caption_row)
+
         self.cmb_aoi_layer = QComboBox()
         aoi_layout.addWidget(self.cmb_aoi_layer)
         self.btn_use_layer_extent = QPushButton("Use extent")
         aoi_layout.addWidget(self.btn_use_layer_extent)
+
+        self.rad_aoi_draw.toggled.connect(self._on_aoi_mode_changed)
+        self.rad_aoi_layer.toggled.connect(self._on_aoi_mode_changed)
+        self._on_aoi_mode_changed()
+
+        lbl_aoi_method = QLabel("Set area of interest by:")
+        bold_font = lbl_aoi_method.font()
+        bold_font.setBold(True)
+        lbl_aoi_method.setFont(bold_font)
+        aoi_layout.addWidget(lbl_aoi_method)
+
         self.lbl_aoi_bbox = QLabel("Whole globe (no area set).")
         self.lbl_aoi_bbox.setWordWrap(True)
         aoi_layout.addWidget(self.lbl_aoi_bbox)
@@ -227,11 +272,6 @@ class BrowseTab(QWidget):
         self.lbl_request.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         box_layout.addWidget(self.lbl_request)
 
-        self.btn_preview = QPushButton("Preview as WMTS layer")
-        self.btn_preview.setEnabled(False)
-        self.btn_preview.setMinimumHeight(32)
-        self.btn_preview.clicked.connect(self._on_preview_clicked)
-        box_layout.addWidget(self.btn_preview)
         self.btn_download = QPushButton("Download GeoTIFF")
         self.btn_download.setEnabled(False)
         self.btn_download.setMinimumHeight(32)
@@ -301,6 +341,18 @@ class BrowseTab(QWidget):
             self.list_dataset.addItem(item)
         self.list_dataset.blockSignals(False)
 
+    def _on_aoi_mode_changed(self):
+        """Grey out whichever AOI method isn't selected via the radio
+        buttons — both stay visible (this tab uses a real layout, but
+        hiding one would still shuffle everything below it on every mode
+        switch) with only the active one actually usable."""
+        draw_mode = self.rad_aoi_draw.isChecked()
+        self.btn_draw_aoi.setEnabled(draw_mode)
+        self.lbl_aoi_layer_caption.setEnabled(not draw_mode)
+        self.lbl_aoi_layer_info_icon.setEnabled(not draw_mode)
+        self.cmb_aoi_layer.setEnabled(not draw_mode)
+        self.btn_use_layer_extent.setEnabled(not draw_mode)
+
     # ------------------------------------------------------------------ #
     # Cascade
     # ------------------------------------------------------------------ #
@@ -313,7 +365,7 @@ class BrowseTab(QWidget):
         self._dataset_title = current.text()
         self.lbl_dataset_sel.setText(current.text())
         self.lbl_status.setText("Loading constraints…")
-        self.btn_preview.setEnabled(False)
+        self.btn_download.setEnabled(False)
 
         try:
             self._constraints = gb_wrapper.get_constraints(dataset_id)
@@ -402,7 +454,7 @@ class BrowseTab(QWidget):
                     break
         finally:
             self._updating = False
-        self._update_preview()
+        self._update_selection_state()
 
     def _apply_states(self, states: dict, initial: bool) -> bool:
         """Paint each list from `states`. Returns True if a previously
@@ -492,14 +544,13 @@ class BrowseTab(QWidget):
         request = {}
         for field, value in self._read_selection().items():
             request[field] = value if isinstance(value, list) else [value]
+        if self._dataset_id:
+            extras = gb_wrapper.extra_required_field_defaults(self._dataset_id, FIELDS)
+            for field, value in extras.items():
+                request.setdefault(field, value if isinstance(value, list) else [value])
         return request
 
-    @staticmethod
-    def _is_single(value) -> bool:
-        """True when a pick resolves to exactly one value (str, or 1-list)."""
-        return len(value) == 1 if isinstance(value, list) else value is not None
-
-    def _update_preview(self):
+    def _update_selection_state(self):
         selection = self._read_selection()
 
         # 1. Per-column echo labels — readable even when the highlight scrolls
@@ -513,39 +564,28 @@ class BrowseTab(QWidget):
 
         if not selection:
             self.lbl_request.setText("Nothing selected yet.")
-            self.btn_preview.setEnabled(False)
             self.btn_download.setEnabled(False)
             self.lbl_status.setText("")
             return
 
         parts = [f"dataset={self._dataset_id}"] if self._dataset_id else []
         parts += [f"{f}={self._display(f, selection[f])}" for f in FIELDS if f in selection]
+        extras = gb_wrapper.extra_required_field_defaults(self._dataset_id, FIELDS) if self._dataset_id else {}
+        parts += [f"{f}={v} (auto)" for f, v in extras.items()]
         self.lbl_request.setText("  ".join(parts))
 
-        has_wmts = bool(self._descriptor and getattr(self._descriptor, "has_wmts", False))
         has_variable = "variable" in selection
 
         # Download just needs at least one temporal pick (some datasets are
         # monthly and have no 'day' field at all).
         has_temporal = any(f in selection for f in MULTI_FIELDS)
-        # Preview builds one WMTS timestamp — needs a single year, month AND day.
-        ymd_single = all(
-            f in selection and self._is_single(selection[f]) for f in _DATETIME_FIELDS
-        )
 
-        self.btn_preview.setEnabled(has_wmts and has_variable and ymd_single)
         self.btn_download.setEnabled(has_variable and has_temporal)
 
         if not has_variable:
             self.lbl_status.setText("Pick a variable.")
         elif not has_temporal:
             self.lbl_status.setText("Pick at least one date value.")
-        elif not ymd_single and has_wmts:
-            self.lbl_status.setText(
-                "Ready to Download. Preview needs a single year, month and day."
-            )
-        elif not has_wmts:
-            self.lbl_status.setText("No WMTS preview for this dataset — Download only.")
         else:
             self.lbl_status.setText("")
 
@@ -590,37 +630,7 @@ class BrowseTab(QWidget):
         self.lbl_summary.setText("Nothing selected yet.")
         self.lbl_request.setText("Nothing selected yet.")
         self.lbl_status.setText("")
-        self.btn_preview.setEnabled(False)
         self.btn_download.setEnabled(False)
-
-    @staticmethod
-    def _one(value) -> str:
-        """First value of a (possibly multi-select) pick."""
-        return value[0] if isinstance(value, list) else value
-
-    def _on_preview_clicked(self):
-        selection = self._read_selection()
-        try:
-            time_sel = selection.get("time")
-            time_value = self._one(time_sel) if time_sel else "00:00"
-            datetime_iso = time_utils.iso_from_parts(
-                self._one(selection["year"]),
-                self._one(selection["month"]),
-                self._one(selection["day"]),
-                time_value,
-            )
-        except (KeyError, ValueError, IndexError) as exc:
-            self.lbl_status.setText(f"Can't build a timestamp: {exc}")
-            return
-
-        payload = {
-            "dataset_id": self._dataset_id,
-            "variable": selection["variable"],
-            "datetime": datetime_iso,
-            "descriptor": self._descriptor,
-            "request": self._current_request(),
-        }
-        self.previewRequested.emit(payload)
 
     def _on_download_clicked(self):
         selection = self._read_selection()

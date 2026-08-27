@@ -8,6 +8,11 @@ Time Series Tab
 Fetches how a single point's value changes over time, for the
 dataset/variable currently selected on the :doc:`search_tab`.
 
+This tab has no dataset picker of its own — a "Selected dataset: …" /
+"variable …" block at the top (with a hoverable info icon) always shows
+which dataset/variable it's currently reading from, so it's clear this
+reflects the Search tab's selection rather than something chosen here.
+
 Picking a point
 ------------------
 
@@ -25,7 +30,8 @@ Method
 * **Full history (Zarr, needs auth)** — one bulk read off the ARCO Zarr
   archive. Needs the ``geobridge[zarr]`` extra installed and an
   authenticated CDS API key (see :doc:`api_key_tab`); best for long or
-  dense ranges.
+  dense ranges. Disabled entirely when the selected dataset has no ARCO
+  Zarr archive to read from — "Quick" is the only option for those.
 
 Range and results
 --------------------

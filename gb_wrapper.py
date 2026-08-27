@@ -22,11 +22,48 @@ docstring in the main GeoBridge repo).
 
 from __future__ import annotations
 
+import sys
+from contextlib import contextmanager
+from functools import lru_cache
 from typing import Any, Callable, Optional
 
 
 class GeobridgeNotInstalled(RuntimeError):
     """Raised when `geobridge` (or an optional extra) isn't importable yet."""
+
+
+class _NullStream:
+    """No-op file-like object — see _quiet_stderr()."""
+
+    def write(self, *args, **kwargs):
+        pass
+
+    def flush(self, *args, **kwargs):
+        pass
+
+
+@contextmanager
+def _quiet_stderr():
+    """Temporarily swallow stderr writes for the duration of the `with` block.
+
+    gb.semantic_resources() (geobridge>=0.1.10) pulls in scikit-learn's
+    optional pandas integration; on a QGIS install whose bundled pyarrow
+    was built against NumPy 1.x, that hits numpy's own deprecated-attribute
+    shim on every single call. The shim writes a full traceback string
+    straight to sys.stderr as a side effect — bypassing Python's `warnings`
+    module entirely, so warning filters can't catch it — even though the
+    ImportError it's reporting is fully caught inside scikit-learn and
+    results still come back correctly. Left alone, this would dump a
+    scary-looking (but harmless) traceback into QGIS's log on every single
+    search. Scoped tightly to just the one call rather than swallowing
+    stderr for the plugin's whole lifetime.
+    """
+    original = sys.stderr
+    sys.stderr = _NullStream()
+    try:
+        yield
+    finally:
+        sys.stderr = original
 
 
 # ---------------------------------------------------------------------------
@@ -123,13 +160,36 @@ def is_authenticated() -> bool:
 # Discovery / semantic search
 # ---------------------------------------------------------------------------
 
-def semantic_search(query: str, max_results: int = 15, min_confidence: float = 0.1) -> list:
-    """Return a list of geobridge.SemanticMatch, unsorted (caller sorts)."""
+def semantic_resources(query: str, max_results: int = 15, min_confidence: float = 0.1) -> list:
+    """Return a list of geobridge.ResourceMatch, unsorted (caller sorts).
+
+    Powers the Search tab. Uses gb.semantic_resources() (geobridge>=0.1.10)
+    rather than the older gb.semantic_search() — it combines the same
+    curated rule-based matching (vocabulary.yaml's ~40 hand-written use
+    cases) with TF-IDF cosine-similarity retrieval over the *entire*
+    catalog, so results aren't limited to datasets a curator happened to
+    write a use case for. A ResourceMatch has `themes`/`use_cases` (lists,
+    often empty for TF-IDF-only matches) rather than SemanticMatch's single
+    `use_case_label` string — see _populate_results in
+    geobridge_plugin_dialog.py for how the Use case column handles that.
+    """
     try:
         import geobridge as gb
     except ImportError as exc:
         raise GeobridgeNotInstalled(str(exc)) from exc
-    return gb.semantic_search(query, max_results=max_results, min_confidence=min_confidence)
+    with _quiet_stderr():
+        return gb.semantic_resources(query, max_results=max_results, min_confidence=min_confidence)
+
+
+def use_case_labels() -> dict:
+    """Map every curated use-case id to its human-readable label, e.g.
+    {"extreme_precipitation": "Extreme precipitation event mapping"} —
+    ResourceMatch.use_cases carries raw ids, not labels."""
+    try:
+        import geobridge as gb
+    except ImportError as exc:
+        raise GeobridgeNotInstalled(str(exc)) from exc
+    return {uc["id"]: uc["label"] for uc in gb.list_use_cases()}
 
 
 def discover_one(dataset_id: str):
@@ -165,6 +225,88 @@ def _cds_snapshot_dataset_ids() -> Optional[set]:
     except (OSError, yaml.YAMLError):
         return None
     return set((data.get("datasets") or {}).keys())
+
+
+@lru_cache(maxsize=1)
+def _load_arco_snapshot() -> dict:
+    """Cache of geobridge's bundled `semantic/arco_snapshot.yaml` — the ARCO
+    catalogue snapshot, keyed by dataset id (underscored form). Empty dict
+    if it can't be located/read."""
+    try:
+        import geobridge
+        import yaml
+    except ImportError:
+        return {}
+    from pathlib import Path
+
+    snapshot_path = Path(geobridge.__file__).parent / "semantic" / "arco_snapshot.yaml"
+    if not snapshot_path.exists():
+        return {}
+    try:
+        with snapshot_path.open(encoding="utf-8") as fp:
+            data = yaml.safe_load(fp) or {}
+    except (OSError, yaml.YAMLError):
+        return {}
+    return data.get("datasets") or {}
+
+
+def _variable_meta(dataset_id: str, variable: str) -> dict:
+    """Raw per-variable metadata dict from arco_snapshot.yaml (unit,
+    colormap, value_min, value_max, log_scale, ...) — {} if the dataset
+    isn't ARCO-backed or the variable isn't found.
+
+    LayerDescriptor.colormap (what discover()/discover_one() expose) is a
+    *dataset*-level field populated from only the dataset's first variable
+    (see geobridge/modules/discover.py's _descriptor_from_arco) — using it
+    for whichever variable happens to be currently selected is wrong
+    whenever that isn't the first one (e.g. reanalysis_era5_single_levels's
+    first variable is "blh", unit "m"; naively using descriptor.colormap
+    for a t2m plot would mislabel its axis "m" instead of "K"). This reads
+    the per-variable metadata directly from arco_snapshot.yaml instead —
+    the same file gb.wmts_layer(style="default") itself reads to pick the
+    palette/style sent to the WMTS server, so it matches what's actually
+    rendered on screen (see modules/wmts.py), unlike the separate/
+    inconsistent preset table modules/style.py's to_qgis_style() uses.
+    """
+    arco = _load_arco_snapshot()
+    entry = arco.get(dataset_id.replace("-", "_"))
+    if not entry:
+        return {}
+    subsets = entry.get("subsets") or {}
+    if not subsets:
+        return {}
+    sub = None
+    for preferred in ("sfc", "all", "surface"):
+        if preferred in subsets:
+            sub = subsets[preferred]
+            break
+    if sub is None:
+        sub = next(iter(subsets.values()))
+    return (sub.get("variables") or {}).get(variable) or {}
+
+
+def variable_unit(dataset_id: str, variable: str) -> str:
+    """Physical unit for one specific variable of one dataset, e.g. "K" for
+    reanalysis_era5_single_levels/t2m — "" if unknown."""
+    return _variable_meta(dataset_id, variable).get("unit", "") or ""
+
+
+def variable_style(dataset_id: str, variable: str) -> dict:
+    """Legend-ready style info for one variable: {"unit", "colormap",
+    "value_min", "value_max"} — same source gb.wmts_layer(style="default")
+    itself reads to color the WMTS tiles this plugin displays, so it
+    describes what's actually on screen. Empty dict if unknown (e.g. a
+    CDS-only dataset with no ARCO backing) — caller should hide/skip the
+    legend in that case rather than show misleading blanks."""
+    meta = _variable_meta(dataset_id, variable)
+    if not meta or meta.get("value_min") is None or meta.get("value_max") is None:
+        return {}
+    return {
+        "unit": meta.get("unit", "") or "",
+        "colormap": meta.get("colormap", "") or "viridis",
+        "value_min": meta.get("value_min"),
+        "value_max": meta.get("value_max"),
+    }
 
 
 def discover_all(keyword: Optional[str] = None) -> list:
@@ -226,6 +368,65 @@ def get_form(dataset_id: str):
     except ImportError as exc:
         raise GeobridgeNotInstalled(str(exc)) from exc
     return gb.fetch_form(dataset_id)
+
+
+def extra_required_field_defaults(dataset_id: str, known_fields) -> dict:
+    """Best-effort {field: value} for CDS form fields that are required but
+    fall outside the Browse tab's fixed cascade (`known_fields` — product_
+    type/variable/year/month/day/time).
+
+    Some datasets have additional required parameters the cascade has no
+    column for — e.g. derived-near-surface-meteorological-variables needs
+    "reference_dataset" (no default; picks its first listed choice, "cru")
+    and "version" (has a declared default, "2.1" -> raw value "2_1").
+    Without these, CDS rejects the request outright with a 400 even though
+    every cascade field looks correctly filled in — nothing in the UI
+    hints that a *different*, non-cascade field is what's actually
+    missing. Returns {} (never raises) if the form can't be fetched.
+    """
+    try:
+        schema = get_form(dataset_id)
+    except GeobridgeNotInstalled:
+        return {}
+    if schema is None:
+        return {}
+
+    result = {}
+    for widget in schema.widgets:
+        if not widget.required or widget.name in known_fields:
+            continue
+        if widget.widget_type == "LicenceWidget":
+            continue  # terms-of-use acceptance, not a data parameter
+        if not widget.values:
+            continue
+
+        details = widget.details or {}
+        default_labels = details.get("default") or []
+        value = None
+        if default_labels:
+            wanted_label = default_labels[0]
+            # widget.values[i]["label"] just echoes the raw value (e.g.
+            # "2_0"), not the human-readable label CDS uses in "default"
+            # (e.g. "2.0") — the raw_value -> pretty_label map lives
+            # separately in details["labels"], so look up the default
+            # there instead of against widget.values directly.
+            pretty_labels = details.get("labels") or {}
+            for raw_value, pretty_label in pretty_labels.items():
+                if pretty_label == wanted_label:
+                    value = raw_value
+                    break
+            if value is None:
+                # Fall back to a verbatim match in case this widget has
+                # no separate labels map and "default" already holds a
+                # raw value.
+                available = {entry.get("value") for entry in widget.values}
+                if wanted_label in available:
+                    value = wanted_label
+        if value is None:
+            value = widget.values[0].get("value")
+        if value is not None:
+            result[widget.name] = value
+    return result
 
 
 def get_constraints(dataset_id: str) -> list:
