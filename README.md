@@ -1,6 +1,18 @@
-# geobridge-qgis
+<p align="center">
+  <img src="icon.png" width="120" alt="GeoBridge logo" />
+</p>
 
-Access and integrate C3S climate data directly in QGIS.
+<h1 align="center">GeoBridge</h1>
+
+<p align="center">Access and integrate C3S climate data directly in QGIS.</p>
+
+<p align="center">
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/ECMWFCode4Earth/geobridge-qgis" /></a>
+  <img alt="QGIS" src="https://img.shields.io/badge/QGIS-%E2%89%A5%203.28-589632" />
+  <a href="https://geobridge-qgis.readthedocs.io/en/latest/?badge=latest"><img alt="Docs" src="https://readthedocs.org/projects/geobridge-qgis/badge/?version=latest" /></a>
+  <img alt="Last commit" src="https://img.shields.io/github/last-commit/ECMWFCode4Earth/geobridge-qgis" />
+  <img alt="Open issues" src="https://img.shields.io/github/issues/ECMWFCode4Earth/geobridge-qgis" />
+</p>
 
 A QGIS 3 plugin that wraps the [geobridge](https://github.com/ECMWFCode4Earth/GeoBridge)
 Python library: enter a Copernicus CDS API key once, semantically search for a use case
@@ -9,6 +21,10 @@ time-stepped WMTS layer directly on the map — with a play/pause slider to scru
 
 This plugin is a thin wrapper. All discovery, semantic search, and WMTS URL logic lives in
 `geobridge`; nothing is reimplemented here.
+
+<p align="center">
+  <img src="docs/_static/screenshots/search_tab.png" width="700" alt="The Search tab: semantic search results, area of interest, time range, and Export to GeoTIFF with a color legend" />
+</p>
 
 ## Documentation
 
