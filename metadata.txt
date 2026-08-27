@@ -2,7 +2,7 @@
 name=GeoBridge
 qgisMinimumVersion=3.28
 description=Discover, semantically search, and preview Copernicus climate data (ERA5, CAMS, CEMS) as WMTS layers directly in QGIS, powered by the geobridge Python library.
-version=0.1.15
+version=0.1.16
 author=GeoBridge contributors
 email=iliasmachairas@outlook.com
 
@@ -14,7 +14,8 @@ repository=https://github.com/ECMWFCode4Earth/geobridge-qgis
 tracker=https://github.com/ECMWFCode4Earth/geobridge-qgis/issues
 
 hasProcessingProvider=no
-changelog=0.1.15 README: add an Authors section (Mentors, Participants).
+changelog=0.1.16 README: add a Mermaid workflow diagram, a Mermaid module diagram in Architecture, and emoji markers on every section heading.
+    0.1.15 README: add an Authors section (Mentors, Participants).
     0.1.14 README: add a centered logo/title header, License/QGIS-version/docs/last-commit/issues badges, and an up-to-date Search tab screenshot; refresh the same screenshot on Read the Docs.
     0.1.13 Docs: replace the large Read the Docs sidebar logo with a small icon on the home page only; favicon unchanged.
     0.1.12 Docs: close out the CDS API key walkthrough with a reminder to accept the licence and to paste only the raw token (not the .cdsapirc url:/key: lines) into this plugin's API key field; add the plugin's own icon as the Read the Docs site favicon/logo.

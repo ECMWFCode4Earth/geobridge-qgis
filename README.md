@@ -26,21 +26,28 @@ This plugin is a thin wrapper. All discovery, semantic search, and WMTS URL logi
   <img src="docs/_static/screenshots/search_tab.png" width="700" alt="The Search tab: semantic search results, area of interest, time range, and Export to GeoTIFF with a color legend" />
 </p>
 
-## Documentation
+```mermaid
+flowchart LR
+    A["🔑 Enter CDS API key"] --> B["🔍 Search or Browse a dataset"]
+    B --> C["🗺️ Preview as a WMTS layer"]
+    B --> D["💾 Export to GeoTIFF"]
+```
+
+## 📖 Documentation
 
 Full docs (installation, and a walkthrough of each tab with screenshots) are built with
 Sphinx from the `docs/` folder — see `docs/index.rst` to read the source directly, or
 connect this repo at [readthedocs.org](https://readthedocs.org) to publish it at
 `https://geobridge-qgis.readthedocs.io`.
 
-## Status
+## 🚦 Status
 
 v1 (this release): API key tab + Search/WMTS-viewer tab. GeoTIFF export
 (`zarr_to_geotiff`/`cds_to_geotiff`) is designed (`export_task.py`) but not yet wired to the
 UI — the "Export to GeoTIFF" button is present but disabled, pending a dedicated pass to
 handle the GDAL/rasterio version-conflict risk on Windows (see `export_task.py`'s docstring).
 
-## Development setup
+## 🛠️ Development setup
 
 This plugin's working copy lives directly under the QGIS profile's plugin folder, so edits
 take effect on the next reload — no build/deploy step:
@@ -55,7 +62,7 @@ Install the [Plugin Reloader](https://plugins.qgis.org/plugins/plugin_reloader/)
 and assign it a shortcut to reload GeoBridge_Plugin after saving changes, without restarting
 QGIS.
 
-### Installing `geobridge` itself
+### 📦 Installing `geobridge` itself
 
 Don't `pip install` it yourself into QGIS's Python. Open the plugin, go to the API key tab —
 if `geobridge` isn't importable yet, an "Install dependencies" button appears and installs it
@@ -63,7 +70,7 @@ into the exact Python interpreter QGIS is running (`sys.executable -m pip instal
 After it finishes, reload the plugin via Plugin Reloader (a full QGIS restart is not needed
 for this tier).
 
-### Running the plain-Python tests
+### ✅ Running the plain-Python tests
 
 `time_utils.py` and the non-network parts of `gb_wrapper.py` have zero PyQt/`qgis` imports and
 run under plain `pytest`, no QGIS installation required:
@@ -77,7 +84,20 @@ Everything else (the dialog, WMTS layer rendering, dependency installer) has to 
 manually inside a real QGIS session — see the "Verification" section of the project's
 implementation plan for the manual test checklist.
 
-## Architecture
+## 🏗️ Architecture
+
+```mermaid
+flowchart TD
+    init["__init__.py"] --> plugin["geobridge_plugin.py"]
+    plugin --> dialog["geobridge_plugin_dialog.py"]
+    dialog --> gbw["gb_wrapper.py"]
+    dialog --> tu["time_utils.py"]
+    dialog --> installer["dependency_installer.py"]
+    dialog --> exp["export_task.py"]
+    installer --> pipu["pip_utils.py"]
+    gbw --> geobridge[("geobridge library")]
+    exp --> geobridge
+```
 
 ```
 __init__.py                     -> classFactory(iface)
@@ -101,11 +121,11 @@ confirmed working in QGIS 3.28+) — never via `LayerDescriptor.to_qgis()` direc
 builds a WMS-provider URI that QGIS cannot reliably parse against ECMWF's WMTS server (see
 `geobridge/modules/wmts.py`'s module docstring in the main GeoBridge repo for why).
 
-## License
+## ⚖️ License
 
 MIT. See `LICENSE`.
 
-## Authors
+## 👥 Authors
 
 **Mentors**
 - Angel Lopez Alos
