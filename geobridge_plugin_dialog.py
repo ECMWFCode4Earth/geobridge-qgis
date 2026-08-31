@@ -45,7 +45,7 @@ from __future__ import annotations
 
 import csv
 import os
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from qgis.PyQt import uic
 from qgis.PyQt import QtWidgets
@@ -116,6 +116,29 @@ def _to_qdatetime(dt) -> QDateTime:
     """Convert a Python datetime to a QDateTime (date/time components only,
     tzinfo is dropped — QDateTimeEdit displays local wall-clock values)."""
     return QDateTime(QDate(dt.year, dt.month, dt.day), QTime(dt.hour, dt.minute, dt.second))
+
+
+def _parse_extent_datetime(iso: str):
+    """Parse a gb_wrapper.variable_time_extent() ISO-Z string to a naive
+    datetime (tzinfo dropped, same convention as _to_qdatetime/dt_start —
+    everything here is treated as wall-clock UTC), or None if unparseable."""
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00") if "T" in iso else iso)
+    except ValueError:
+        return None
+    return dt.replace(tzinfo=None)
+
+
+def _format_extent_date(iso: str) -> str:
+    """Human-readable date for an extent endpoint — drops the time-of-day
+    when it's exactly midnight (the common case), since a bare date reads
+    more naturally than "2025-03-03 00:00"."""
+    dt = _parse_extent_datetime(iso)
+    if dt is None:
+        return iso
+    if dt.hour == dt.minute == dt.second == 0:
+        return dt.strftime("%Y-%m-%d")
+    return dt.strftime("%Y-%m-%d %H:%M")
 
 
 def _cds_dataset_url(dataset_id: str) -> str:
@@ -295,7 +318,7 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         # since its geometry is relative to that group box's own origin,
         # matching lbl_step/cmb_step's coordinate space.
         self.lbl_step_info_icon = QtWidgets.QLabel(self.groupBox_time_range)
-        self.lbl_step_info_icon.setGeometry(250, 90, 18, 18)
+        self.lbl_step_info_icon.setGeometry(250, 116, 18, 18)
         self.lbl_step_info_icon.setPixmap(_info_icon(18))
         self.lbl_step_info_icon.setToolTip(
             "Step picks which individual timestamps to render as separate "
@@ -351,7 +374,7 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         # strip directly below it; lbl_current_time/btn_play were then
         # moved down a bit further for breathing room from the ticks.
         self._slider_ticks = _SliderTickMarks(self.slider_time, self.groupBox_time_range)
-        self._slider_ticks.setGeometry(10, 146, 520, 8)
+        self._slider_ticks.setGeometry(10, 172, 520, 8)
 
         # Sane default range until a search result's own coverage narrows it
         now = QDateTime.currentDateTime()
@@ -624,7 +647,7 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         # returns via this package, but it isn't part of geobridge[zarr]
         # itself (that extra only covers the ARCO/Zarr read path).
         self._installer = DependencyInstaller(
-            ["geobridge[zarr]>=0.1.8", "aiohttp", "requests", "netcdf4"]
+            ["geobridge[zarr]>=0.1.12", "aiohttp", "requests", "netcdf4"]
         )
         self._installer.finished_ok.connect(self._on_core_install_done)
         self._installer.finished_err.connect(self._on_core_install_failed)
@@ -780,6 +803,7 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         has_wmts = bool(descriptor and descriptor.has_wmts)
         self.groupBox_time_range.setVisible(has_wmts)
         self._update_legend(descriptor, match, has_wmts)
+        self._update_time_extent(match, has_wmts)
 
         has_zarr = bool(descriptor and getattr(descriptor, "has_zarr", False))
 
@@ -1024,6 +1048,22 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
             label += f" ({variable_labels.friendly_name(match.variable)})"
         self.legend_widget.set_style(style, variable_label=label)
 
+    def _update_time_extent(self, match, has_wmts):
+        """Show the actual data-coverage range for the newly selected
+        variable, next to Start/End — see gb_wrapper.variable_time_extent's
+        docstring for what this is (and isn't) guaranteed to reflect."""
+        if not has_wmts:
+            self.lbl_time_extent.setText("")
+            return
+        extent = gb_wrapper.variable_time_extent(match.dataset_id, match.variable)
+        if not extent:
+            self.lbl_time_extent.setText("")
+            return
+        start, end = extent
+        self.lbl_time_extent.setText(
+            f"Data available: {_format_extent_date(start)} to {_format_extent_date(end)}"
+        )
+
     # ------------------------------------------------------------------ #
     # Area of interest — shared "draw on map" tool, independent bboxes per
     # tab (Search / Tab 2 and Browse by Variable / Tab 3)
@@ -1107,8 +1147,30 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         if self._previous_map_tool is not None:
             canvas.setMapTool(self._previous_map_tool)
             self._previous_map_tool = None
+        else:
+            # No tool was active before the draw started (canvas.mapTool()
+            # returned None) — canvas.setMapTool() above never ran, so
+            # _aoi_tool would otherwise stay the active tool indefinitely,
+            # its crosshair cursor stuck on the canvas even after this
+            # dialog closes. Same fallback _on_pick_point_toggled already
+            # uses for the Time Series pick tool.
+            canvas.unsetMapTool(self._aoi_tool)
+        # Bring the dialog back directly here rather than relying solely on
+        # _on_aoi_tool_deactivated (wired to the tool's `deactivated` signal,
+        # meant to fire as a side effect of the setMapTool() call above) —
+        # reported bug: the rectangle draws fine, but the dialog then stays
+        # hidden forever, i.e. that signal hop doesn't reliably bring it
+        # back. Calling show() unconditionally right after a successful draw
+        # makes that the one thing this method is responsible for, with no
+        # dependency on a second signal round-trip actually firing.
+        self.show()
+        self.raise_()
+        self.activateWindow()
 
     def _on_aoi_tool_deactivated(self):
+        # Cancel path (Escape / switching to another QGIS tool mid-draw
+        # without completing a rectangle) — extentChanged never fires here,
+        # so this is the only place that brings the dialog back.
         self.show()
         self.raise_()
         self.activateWindow()
@@ -1152,8 +1214,17 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         text = f"{source} — {aoi_utils.format_bbox(bbox)}"
         warning = aoi_utils.validate_bbox_size(bbox)
         lbl_bbox.setText(text)
-        lbl_warn.setText(warning or "")
-        lbl_warn.setVisible(bool(warning))
+        if warning:
+            lbl_warn.setText(warning)
+            lbl_warn.setStyleSheet("color: #a33;")
+        else:
+            # Explicit positive confirmation rather than just hiding the
+            # label — otherwise a long warning that WAS visible a moment
+            # ago (e.g. while dragging a too-large rectangle) simply
+            # vanishes with nothing replacing it, easy to miss.
+            lbl_warn.setText("✓ Area size looks good.")
+            lbl_warn.setStyleSheet("color: #2e7d32;")
+        lbl_warn.setVisible(True)
 
     def _on_build_layers_clicked(self):
         if self._current_match is None:
@@ -1162,6 +1233,34 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         start = self.dt_start.dateTime().toPyDateTime()
         end = self.dt_end.dateTime().toPyDateTime()
         step = time_utils.STEP_CHOICES[self.cmb_step.currentData()]
+
+        raw_time_step = getattr(self._current_descriptor, "time_step", "")
+        alignment_warning = time_utils.monthly_alignment_warning(raw_time_step, start)
+        if alignment_warning:
+            answer = QMessageBox.question(
+                self, "GeoBridge", alignment_warning + "\n\nBuild anyway?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+
+        extent = gb_wrapper.variable_time_extent(
+            self._current_match.dataset_id, self._current_match.variable
+        )
+        if extent:
+            extent_start, extent_end = (_parse_extent_datetime(e) for e in extent)
+            if extent_start and extent_end and (end < extent_start or start > extent_end):
+                answer = QMessageBox.question(
+                    self, "GeoBridge",
+                    f"This variable's data only covers "
+                    f"{_format_extent_date(extent[0])} to {_format_extent_date(extent[1])}. "
+                    f"Your requested range falls entirely outside that, so every tile "
+                    f"request would fail. Build anyway?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if answer != QMessageBox.StandardButton.Yes:
+                    return
 
         try:
             steps = time_utils.generate_time_steps(start, end, step)
@@ -1806,16 +1905,35 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
             self.browse_tab.refresh_datasets()
         self._apply_tab_size(self.tabWidget.currentIndex())
 
+    def _reset_aoi_tool_if_active(self):
+        """If the AOI rectangle tool is still the active canvas tool when
+        this dialog closes — e.g. the user opened "Draw on map" and closed
+        the plugin instead of finishing/cancelling the draw — restore
+        whichever tool preceded it (or just unset it) so its crosshair
+        cursor doesn't stay stuck on the canvas after the plugin is gone."""
+        if self._aoi_tool is None:
+            return
+        canvas = self.iface.mapCanvas()
+        if canvas.mapTool() is not self._aoi_tool:
+            return
+        if self._previous_map_tool is not None:
+            canvas.setMapTool(self._previous_map_tool)
+            self._previous_map_tool = None
+        else:
+            canvas.unsetMapTool(self._aoi_tool)
+
     def reject(self):
         self._stop_play()
         self._prefetch_timer.stop()
         self.btn_pick_point.setChecked(False)
+        self._reset_aoi_tool_if_active()
         super(GeoBridgePluginDialog, self).reject()
 
     def closeEvent(self, event):
         self._stop_play()
         self._prefetch_timer.stop()
         self.btn_pick_point.setChecked(False)
+        self._reset_aoi_tool_if_active()
         super(GeoBridgePluginDialog, self).closeEvent(event)
 
     def cleanup(self):

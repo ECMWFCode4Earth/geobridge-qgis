@@ -261,6 +261,46 @@ def native_step_seconds(raw_time_step: str) -> Optional[int]:
     return _parse_time_step_seconds(raw_time_step)
 
 
+def monthly_alignment_warning(raw_time_step: str, start: datetime) -> Optional[str]:
+    """Warn when `start` looks misaligned with a monthly/yearly-native
+    dataset's actual available timestamps.
+
+    Monthly/yearly composite layers (e.g. WMTS "monthly-mean" products) are
+    published on fixed calendar dates — normally the 1st of the month (or
+    year). generate_time_steps() has no concept of calendar months (its
+    "1 month"/"1 year" STEP_CHOICES entries are fixed 30-/365-day
+    timedeltas — see the module docstring), so nothing else stops a user
+    from picking an arbitrary start day. A start that doesn't land on the
+    1st then asks the WMTS server for a TIME the dataset simply has no
+    tile for at all, which fails identically for every tile in the
+    request (not a random subset) after retries — the "max retry" /
+    "repeat tileRequest" warnings this is meant to head off.
+
+    Returns None when raw_time_step isn't monthly/yearly, or start is
+    already aligned.
+    """
+    raw = (raw_time_step or "").strip().lower()
+    if raw in ("month", "months"):
+        if start.day != 1:
+            return (
+                f"This dataset's native resolution is monthly — timestamps are "
+                f"normally dated the 1st of each month. Your start date "
+                f"({start:%Y-%m-%d}) isn't the 1st, so the server may have no "
+                f"tile at that exact time and every tile request could fail. "
+                f"Consider starting from {start.replace(day=1):%Y-%m-%d} instead."
+            )
+    elif raw in ("year", "years"):
+        if not (start.month == 1 and start.day == 1):
+            return (
+                f"This dataset's native resolution is yearly — timestamps are "
+                f"normally dated January 1st. Your start date ({start:%Y-%m-%d}) "
+                f"isn't Jan 1st, so the server may have no tile at that exact "
+                f"time and every tile request could fail. Consider starting "
+                f"from {start.year}-01-01 instead."
+            )
+    return None
+
+
 def exact_step_choice(raw_time_step: str) -> Optional[str]:
     """Return the STEP_CHOICES label whose interval exactly matches a
     dataset's raw time_step (within 1 second, to absorb float rounding), or

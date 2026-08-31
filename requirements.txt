@@ -5,5 +5,5 @@
 #
 # Listed here purely so a human (or an external CI job testing gb_wrapper.py /
 # time_utils.py with plain pytest) knows what's needed:
-geobridge>=0.1.8
+geobridge>=0.1.12
 pyyaml

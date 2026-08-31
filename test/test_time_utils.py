@@ -12,6 +12,7 @@ from time_utils import (
     finer_than_native_steps,
     generate_time_steps,
     iso_from_parts,
+    monthly_alignment_warning,
     native_step_seconds,
 )
 
@@ -130,3 +131,29 @@ def test_finer_than_native_steps_unparseable_disables_nothing():
 def test_finer_than_native_steps_daily_dataset():
     finer = finer_than_native_steps("day")
     assert finer == {"1 hour", "3 hours", "6 hours"}
+
+
+def test_monthly_alignment_warning_flags_mid_month_start():
+    warning = monthly_alignment_warning("month", datetime(2023, 8, 26))
+    assert warning is not None
+    assert "2023-08-01" in warning
+
+
+def test_monthly_alignment_warning_first_of_month_is_fine():
+    assert monthly_alignment_warning("month", datetime(2023, 8, 1)) is None
+
+
+def test_monthly_alignment_warning_flags_non_jan1_yearly_start():
+    warning = monthly_alignment_warning("year", datetime(2023, 6, 15))
+    assert warning is not None
+    assert "2023-01-01" in warning
+
+
+def test_monthly_alignment_warning_jan1_yearly_start_is_fine():
+    assert monthly_alignment_warning("year", datetime(2023, 1, 1)) is None
+
+
+def test_monthly_alignment_warning_none_for_non_monthly_dataset():
+    assert monthly_alignment_warning("1h", datetime(2023, 8, 26)) is None
+    assert monthly_alignment_warning("day", datetime(2023, 8, 26)) is None
+    assert monthly_alignment_warning("", datetime(2023, 8, 26)) is None

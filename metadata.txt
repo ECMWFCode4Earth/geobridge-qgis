@@ -2,7 +2,7 @@
 name=GeoBridge
 qgisMinimumVersion=3.28
 description=Discover, semantically search, and preview Copernicus climate data (ERA5, CAMS, CEMS) as WMTS layers directly in QGIS, powered by the geobridge Python library.
-version=0.1.16
+version=0.1.17
 author=GeoBridge contributors
 email=iliasmachairas@outlook.com
 
@@ -14,7 +14,8 @@ repository=https://github.com/ECMWFCode4Earth/geobridge-qgis
 tracker=https://github.com/ECMWFCode4Earth/geobridge-qgis/issues
 
 hasProcessingProvider=no
-changelog=0.1.16 README: add a Mermaid workflow diagram, a Mermaid module diagram in Architecture, and emoji markers on every section heading.
+changelog=0.1.17 Fix "Draw on map" for area of interest: completing a rectangle no longer depends on a second signal round-trip to bring the dialog back (it could stay hidden indefinitely), and the crosshair map tool no longer gets stuck active on the canvas (including after closing the plugin) when no previous tool existed to restore. Area-of-interest warning label is no longer clipped for long "too large" messages, and now shows a positive confirmation when the area size is fine instead of just going blank. Search tab: warns before building WMTS layers for a monthly/yearly-native dataset whose start date doesn't land on the expected calendar boundary (a frequent cause of every tile failing identically), and now shows the actual data-coverage range for the selected variable next to Start/End, warning (default: no) if the requested range falls entirely outside it. Bumped the minimum installed geobridge version to 0.1.12.
+    0.1.16 README: add a Mermaid workflow diagram, a Mermaid module diagram in Architecture, and emoji markers on every section heading.
     0.1.15 README: add an Authors section (Mentors, Participants).
     0.1.14 README: add a centered logo/title header, License/QGIS-version/docs/last-commit/issues badges, and an up-to-date Search tab screenshot; refresh the same screenshot on Read the Docs.
     0.1.13 Docs: replace the large Read the Docs sidebar logo with a small icon on the home page only; favicon unchanged.

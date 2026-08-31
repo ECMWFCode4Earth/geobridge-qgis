@@ -25,7 +25,7 @@ from __future__ import annotations
 import sys
 from contextlib import contextmanager
 from functools import lru_cache
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Tuple
 
 
 class GeobridgeNotInstalled(RuntimeError):
@@ -289,6 +289,44 @@ def variable_unit(dataset_id: str, variable: str) -> str:
     """Physical unit for one specific variable of one dataset, e.g. "K" for
     reanalysis_era5_single_levels/t2m — "" if unknown."""
     return _variable_meta(dataset_id, variable).get("unit", "") or ""
+
+
+def variable_time_extent(dataset_id: str, variable: str) -> Optional[Tuple[str, str]]:
+    """(start_iso, end_iso) actually covered by data for `variable`, or None
+    if unknown — the ARCO subset's own time_start/time_end (same values
+    arco_snapshot.yaml's per-subset dimensions.time.extent carries).
+
+    Deliberately mirrors geobridge.modules.discover._arco_subset_for_variable's
+    own resolution policy (first subset — in snapshot file order — whose
+    `variables` map lists this variable) rather than _variable_meta()'s
+    "sfc"/"all"/"surface"-preferred policy used for the legend: this is
+    meant to describe the time range for whichever subset a WMTS preview
+    request will *actually* be routed to today, not an unrelated one.
+
+    Caveat: geobridge's subset resolution is not itself datetime-aware — a
+    variable split across several era-specific subsets (e.g.
+    satellite_albedo's per-sensor subsets covering different decades)
+    always resolves to the same one regardless of the requested date, so
+    the range this returns can be wrong for those datasets specifically.
+    Still a real, useful signal for the (far more common) single- or
+    few-subset case, and a strictly better warning than none at all.
+    """
+    arco = _load_arco_snapshot()
+    entry = arco.get(dataset_id.replace("-", "_"))
+    if not entry:
+        return None
+    subsets = entry.get("subsets") or {}
+    sub = None
+    for candidate in subsets.values():
+        if variable in (candidate.get("variables") or {}):
+            sub = candidate
+            break
+    if sub is None:
+        return None
+    start, end = sub.get("time_start"), sub.get("time_end")
+    if not start or not end:
+        return None
+    return (start, end)
 
 
 def variable_style(dataset_id: str, variable: str) -> dict:
