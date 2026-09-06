@@ -647,7 +647,7 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         # returns via this package, but it isn't part of geobridge[zarr]
         # itself (that extra only covers the ARCO/Zarr read path).
         self._installer = DependencyInstaller(
-            ["geobridge[zarr]>=0.1.12", "aiohttp", "requests", "netcdf4"]
+            ["geobridge[zarr]>=0.1.13", "aiohttp", "requests", "netcdf4"]
         )
         self._installer.finished_ok.connect(self._on_core_install_done)
         self._installer.finished_err.connect(self._on_core_install_failed)
@@ -838,7 +838,19 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         # Seed a sane start/end regardless of WMTS support — export (below)
         # uses these same fields even for a has_zarr-but-no-WMTS dataset.
         if descriptor is not None:
-            end = descriptor.time_range[1]
+            # Floor to midnight: descriptor.time_range[1] is whatever exact
+            # H:M:S geobridge's own metadata happens to report as this
+            # dataset's latest timestamp — often a processing/ingest instant
+            # (e.g. "...T00:01:00Z"), not necessarily a real grid point. For
+            # a daily/monthly/etc.-native dataset the WMTS server has no
+            # tile at that exact stray minute, so a "Build layers" click on
+            # the untouched defaults failed every tile identically. Midnight
+            # is always a valid instant for every native cadence this WMTS
+            # server serves, so seeding there instead is strictly safer,
+            # at the cost of up to ~24h less freshness for genuinely
+            # hourly-native datasets — an acceptable trade for defaults the
+            # user hasn't touched yet.
+            end = descriptor.time_range[1].replace(hour=0, minute=0, second=0, microsecond=0)
             start = end - timedelta(days=DEFAULT_WINDOW_DAYS)
             self.dt_end.setDateTime(_to_qdatetime(end))
             self.dt_start.setDateTime(_to_qdatetime(start))
@@ -1228,6 +1240,25 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
 
     def _on_build_layers_clicked(self):
         if self._current_match is None:
+            return
+
+        # A previous click's prefetch burst (up to 40 layers, each firing a
+        # batch of tile requests — see _start_prefetch) is still running.
+        # Letting a rapid re-click tear that down and immediately start a
+        # fresh burst on top of requests already in flight is exactly the
+        # "click Build every 10 seconds" pattern that can pile up requests
+        # against the WMTS server (which can itself be the very thing
+        # returning errors when it's under strain) — refuse and say why,
+        # rather than silently doing it anyway.
+        if self._prefetch_timer.isActive():
+            QMessageBox.information(
+                self, "GeoBridge",
+                "Still loading the previous set of layers — building again "
+                "right now would pile more requests on top of those, which "
+                "can itself cause the WMTS server to start returning errors. "
+                "Wait a few seconds for the current layers to finish loading, "
+                "then try again."
+            )
             return
 
         start = self.dt_start.dateTime().toPyDateTime()
