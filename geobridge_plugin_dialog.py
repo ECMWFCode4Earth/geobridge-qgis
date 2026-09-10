@@ -72,12 +72,11 @@ from qgis.gui import QgsMapToolEmitPoint, QgsMapToolExtent
 
 from . import aoi_utils
 from . import export_utils
-from . import gb_wrapper
+from . import gdal_wrapper as gb_wrapper
 from . import icons
 from . import time_utils
 from . import variable_labels
 from .browse_tab import BrowseTab
-from .dependency_installer import DependencyInstaller
 from .export_task import ExportTask
 from .legend_widget import VariableLegendWidget
 from .timeseries_task import TimeSeriesTask
@@ -319,9 +318,6 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         self._tile_failure_deadline_timer.timeout.connect(self._report_tile_failures)
         QgsApplication.messageLog().messageReceived.connect(self._on_qgis_message_logged)
 
-        # keeps a strong reference alive while a QThread install is running
-        self._installer = None
-
         # Area-of-interest state — independent per tab (Search vs Browse):
         # drawing/selecting an AOI on one tab must never affect the other's.
         # The QgsMapToolExtent instance itself is shared/reused (only one
@@ -430,7 +426,6 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
 
         # --- signals — Tab 1 ---
         self.btn_save_key.clicked.connect(self._on_save_key_clicked)
-        self.btn_install_core.clicked.connect(self._on_install_core_clicked)
 
         # Eye icon inside the API key field to toggle Password/Normal echo
         # mode — inline QLineEdit action rather than a separate button, so
@@ -580,8 +575,7 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         self._refresh_dependency_banner()
         self._refresh_aoi_layer_combo()
         self._on_ts_method_changed()
-        if gb_wrapper.is_core_available():
-            self.browse_tab.refresh_datasets()
+        self.browse_tab.refresh_datasets()
 
     # ------------------------------------------------------------------ #
     # Tab 1 — API key
@@ -590,12 +584,10 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
     def _load_saved_key(self):
         key = QSettings().value(SETTINGS_PATH_CDS_CREDENTIAL, "", type=str)
         self.txt_api_key.setText(key)
-        if key and gb_wrapper.is_core_available():
+        if key:
             try:
                 gb_wrapper.authenticate(key)
                 self.lbl_auth_status.setText("Authenticated (saved key).")
-            except gb_wrapper.GeobridgeNotInstalled:
-                pass
             except Exception as exc:
                 self.lbl_auth_status.setText(f"Saved key failed to authenticate: {exc}")
 
@@ -605,10 +597,8 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         try:
             gb_wrapper.authenticate(key)
             self.lbl_auth_status.setText("Authenticated.")
-        except gb_wrapper.GeobridgeNotInstalled:
-            self.lbl_auth_status.setText("geobridge is not installed yet — see above.")
         except Exception as exc:
-            # geobridge.AuthenticationError, or any other geobridge exception
+            # gdal_native.auth.AuthenticationError, or any other auth exception
             self.lbl_auth_status.setText(f"Authentication failed: {exc}")
 
     def _on_toggle_key_visibility(self):
@@ -622,127 +612,30 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         self._key_visibility_action.setIcon(_eye_icon(crossed=self._key_visible))
 
     # ------------------------------------------------------------------ #
-    # Dependency install (core tier)
+    # Dependency banner — permanently hidden.
+    #
+    # gdal_native is vendored into this plugin (GDAL comes from QGIS's own
+    # bundled `osgeo`, everything else is stdlib) — there is no separate
+    # package to install, so the "Install dependencies" button/banner this
+    # tab used to show for geobridge no longer has anything to do. The
+    # widgets stay defined in the .ui file rather than being removed
+    # there, so this just keeps both permanently hidden.
+    #
+    # Positions below are exactly the original "fully installed" layout
+    # (previously reached once geobridge+zarr were detected, now just the
+    # permanent state) — reusing already-verified coordinates rather than
+    # guessing new tighter ones now that the button never shows at all.
     # ------------------------------------------------------------------ #
 
     def _refresh_dependency_banner(self):
-        core_ok = gb_wrapper.is_core_available()
-        zarr_ok = gb_wrapper.is_zarr_extra_available()
-        fully_installed = core_ok and zarr_ok
+        self.btn_install_core.setVisible(False)
+        self.lbl_dep_banner.setVisible(False)
 
-        # The button always stays visible — it either invites installation
-        # or confirms it already happened, so it never looks like it just
-        # vanished after a successful install.
-        self.btn_install_core.setVisible(True)
-        if fully_installed:
-            version = gb_wrapper.geobridge_version()
-            label = f"✓ geobridge installed ({version})" if version else "✓ geobridge installed"
-            self.btn_install_core.setText(label)
-            self.btn_install_core.setEnabled(False)
-            self.lbl_dep_banner.setVisible(False)
-        else:
-            self.btn_install_core.setText("Install dependencies")
-            self.btn_install_core.setEnabled(True)
-            if core_ok and not zarr_ok:
-                self.lbl_dep_banner.setText(
-                    "geobridge is installed, but export support (geobridge[zarr]) is "
-                    "missing. Install it to enable Export to GeoTIFF."
-                )
-            else:
-                self.lbl_dep_banner.setText(
-                    "geobridge is not installed yet. Install it to enable authentication, "
-                    "search, and export."
-                )
-            self.lbl_dep_banner.setVisible(True)
-
-        # Absolute-positioned tab: when the banner is hidden (fully
-        # installed), lift the install button and the key-entry widgets up so
-        # the Save button isn't pushed low by the now-empty banner slot.
-        if fully_installed:
-            self.btn_install_core.move(10, 10)
-            lift = 44
-        else:
-            self.btn_install_core.move(10, 52)
-            lift = 0
-        self.lbl_key_title.move(10, 96 - lift)
-        self.txt_api_key.move(10, 118 - lift)
-        self.btn_save_key.move(10, 154 - lift)
-        self.lbl_auth_status.move(120, 154 - lift)
-        self.lbl_key_hint.move(10, 196 - lift)
-
-        # Search/auth only need the base package — don't block them on the
-        # heavier zarr extra being present too.
-        for widget in (self.txt_api_key, self.btn_save_key, self.txt_query, self.btn_search):
-            widget.setEnabled(core_ok)
-
-    def _on_install_core_clicked(self):
-        self.btn_install_core.setEnabled(False)
-        self.btn_install_core.setText("Installing…")
-        # Installs the [zarr] extra too (xarray/rasterio/zarr/rioxarray/fsspec/dask) —
-        # needed for Export to GeoTIFF, not just the pyyaml-only core.
-        #
-        # aiohttp/requests are added explicitly here because the currently
-        # published geobridge[zarr] on PyPI declares plain "fsspec" rather
-        # than "fsspec[http]", so fsspec's HTTPFileSystem (used to open the
-        # ARCO Zarr stores over https://) is otherwise missing them — fixed
-        # at the source for the next geobridge release, but this install
-        # needs to work against what's on PyPI today.
-        #
-        # netcdf4 is added explicitly too: gb.cds_to_geotiff() (the CDS API
-        # download path used for datasets not yet in the ARCO Zarr lake,
-        # e.g. ERA5-Land via the Browse tab) reads the NetCDF file CDS
-        # returns via this package, but it isn't part of geobridge[zarr]
-        # itself (that extra only covers the ARCO/Zarr read path).
-        self._installer = DependencyInstaller(
-            # >=0.1.14: LayerDescriptor.cds_download_supported, which
-            # browse_tab._update_selection_state() gates the Download button
-            # on — datasets CDS validation hasn't confirmed working yet.
-            #
-            # numpy/pandas are pinned to the major.minor QGIS itself ships
-            # (checked directly in a QGIS 3.40.8 install's own site-packages:
-            # numpy 1.26.4, pandas 2.2.2) — `--upgrade` would otherwise
-            # happily replace QGIS's own working copies with whatever newer
-            # version geobridge[zarr]'s dependency tree (xarray/zarr/dask)
-            # is willing to accept. If a future geobridge release needs
-            # newer versions than these ranges allow, pip will fail loudly
-            # with a resolver error here instead of installing a silently-
-            # mismatched stack — re-check QGIS's bundled versions and widen
-            # the ranges when that happens, rather than dropping the pins.
-            #
-            # No pyarrow pin: confirmed by reading geobridge's own
-            # pyproject.toml that nothing in its dependency tree (base,
-            # [zarr], or [full]) requires pyarrow at all — QGIS's bundled
-            # copy (from geopandas, unrelated to this plugin) is never
-            # touched by this install, so there's nothing to protect here.
-            [
-                "geobridge[zarr]>=0.1.14",
-                "numpy>=1.26,<2",
-                "pandas>=2.2,<3",
-                "aiohttp",
-                "requests",
-                "netcdf4",
-            ]
-        )
-        self._installer.finished_ok.connect(self._on_core_install_done)
-        self._installer.finished_err.connect(self._on_core_install_failed)
-        self._installer.start()
-
-    def _on_core_install_done(self, log_text):
-        QMessageBox.information(
-            self,
-            "GeoBridge",
-            "geobridge (with export support) installed successfully.\n\n"
-            "This pulls in GDAL/rasterio-adjacent packages alongside QGIS's own — "
-            "please fully restart QGIS (not just Plugin Reloader) before using "
-            "Export to GeoTIFF, to avoid native-library conflicts. A Plugin Reloader "
-            "reload is enough for authentication and search.",
-        )
-        self._refresh_dependency_banner()
-
-    def _on_core_install_failed(self, log_text):
-        self.btn_install_core.setText("Install dependencies")
-        self.btn_install_core.setEnabled(True)
-        QMessageBox.critical(self, "GeoBridge", f"Install failed:\n\n{log_text}")
+        self.lbl_key_title.move(10, 52)
+        self.txt_api_key.move(10, 74)
+        self.btn_save_key.move(10, 110)
+        self.lbl_auth_status.move(120, 110)
+        self.lbl_key_hint.move(10, 152)
 
     # ------------------------------------------------------------------ #
     # Tab 2 — search
@@ -787,9 +680,6 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
             return
         try:
             matches = gb_wrapper.semantic_resources(query, max_results=15)
-        except gb_wrapper.GeobridgeNotInstalled:
-            QMessageBox.warning(self, "GeoBridge", "Install geobridge first (API Key tab).")
-            return
         except Exception as exc:
             QMessageBox.warning(self, "GeoBridge", f"Search failed: {exc}")
             return
@@ -825,10 +715,7 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         # semantic_search() comes from TF-IDF catalog matches with no
         # curated use case at all); resolve to labels once per search
         # rather than per row, and fall back to "—" when there isn't one.
-        try:
-            uc_labels = gb_wrapper.use_case_labels()
-        except gb_wrapper.GeobridgeNotInstalled:
-            uc_labels = {}
+        uc_labels = gb_wrapper.use_case_labels()
 
         self.list_results.setRowCount(len(matches))
         for row, m in enumerate(matches):
@@ -856,7 +743,7 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
 
         try:
             descriptor = gb_wrapper.discover_one(match.dataset_id)
-        except gb_wrapper.GeobridgeNotInstalled:
+        except Exception:
             descriptor = None
         self._current_descriptor = descriptor
 
@@ -1413,16 +1300,6 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         variable = payload["variable"]
         request = dict(payload["request"])
 
-        if not gb_wrapper.is_core_available():
-            QMessageBox.warning(self, "GeoBridge", "Install geobridge first (API Key tab).")
-            return
-        if not gb_wrapper.is_zarr_extra_available():
-            QMessageBox.warning(
-                self, "GeoBridge",
-                "Download needs the export dependencies — use \"Install "
-                "dependencies\" on the API Key tab first.",
-            )
-            return
         if not gb_wrapper.is_authenticated():
             QMessageBox.warning(
                 self, "GeoBridge",
@@ -1716,7 +1593,10 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
 
         self.btn_export_geotiff.setEnabled(False)
         self.lbl_export_status.setText("Exporting…")
-        self.progress_export.setValue(0)
+        # Indeterminate "busy" mode: ExportTask has no mid-flight progress
+        # to report (see its docstring) — same as the Time Series tab's
+        # "Full history" busy indicator, for the same reason.
+        self.progress_export.setRange(0, 0)
         self.progress_export.setVisible(True)
 
         self._export_task = ExportTask(
@@ -1731,17 +1611,19 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         QgsApplication.taskManager().addTask(self._export_task)
 
     def _on_export_progress(self, progress: float):
-        self.progress_export.setValue(int(progress))
+        pass  # no mid-flight progress to report — see ExportTask's docstring
 
     def _on_export_finished_ok(self):
         self.btn_export_geotiff.setEnabled(True)
         self.progress_export.setVisible(False)
+        self.progress_export.setRange(0, 100)
         path = self._export_task.result_path if self._export_task else None
         self.lbl_export_status.setText(f"Done: {path}")
 
     def _on_export_finished_err(self):
         self.btn_export_geotiff.setEnabled(True)
         self.progress_export.setVisible(False)
+        self.progress_export.setRange(0, 100)
         exc = self._export_task.exception if self._export_task else None
         self.lbl_export_status.setText(f"Export failed: {exc}")
 
@@ -1874,13 +1756,6 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         # being a safe no-op.
         method = self._ts_method()
         if method == "zarr":
-            if not (gb_wrapper.is_core_available() and gb_wrapper.is_zarr_extra_available()):
-                QMessageBox.warning(
-                    self, "GeoBridge",
-                    "Full history needs geobridge[zarr] installed — use the "
-                    "\"Install dependencies\" button on the API Key tab.",
-                )
-                return
             if not gb_wrapper.is_authenticated():
                 QMessageBox.warning(
                     self, "GeoBridge",
@@ -2075,8 +1950,7 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         super(GeoBridgePluginDialog, self).showEvent(event)
         self._refresh_dependency_banner()
         self._refresh_aoi_layer_combo()
-        if gb_wrapper.is_core_available():
-            self.browse_tab.refresh_datasets()
+        self.browse_tab.refresh_datasets()
         self._apply_tab_size(self.tabWidget.currentIndex())
 
     def _reset_aoi_tool_if_active(self):

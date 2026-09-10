@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from qgis.core import QgsTask
 
-from . import gb_wrapper
+from . import gdal_wrapper as gb_wrapper
 
 LOG_TAG = "GeoBridge"
 

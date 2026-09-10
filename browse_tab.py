@@ -39,7 +39,7 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
 )
 
-from . import gb_wrapper
+from . import gdal_wrapper as gb_wrapper
 from . import icons
 
 # Cascade order is only cosmetic (upstream-ish first); the grey-out maths
@@ -314,19 +314,12 @@ class BrowseTab(QWidget):
     def refresh_datasets(self):
         """(Re)populate the dataset list. Safe to call repeatedly.
 
-        Called by the dialog when the tab is shown; needs geobridge, so it
-        degrades to a hint if the library isn't installed yet.
+        Called by the dialog when the tab is shown.
         """
         if self._datasets:
             return  # already populated once
         try:
             datasets = gb_wrapper.discover_all()
-        except gb_wrapper.GeobridgeNotInstalled:
-            self.lbl_hint.setText(
-                "Install geobridge first (API Key tab) to browse datasets by variable."
-            )
-            self.list_dataset.setEnabled(False)
-            return
         except Exception as exc:  # noqa: BLE001 — surface, don't crash the tab
             self.lbl_status.setText(f"Could not list datasets: {exc}")
             return
@@ -371,9 +364,6 @@ class BrowseTab(QWidget):
             self._constraints = gb_wrapper.get_constraints(dataset_id)
             self._form_universes = gb_wrapper.form_universes(dataset_id, FIELDS)
             self._descriptor = gb_wrapper.discover_one(dataset_id)
-        except gb_wrapper.GeobridgeNotInstalled:
-            self.lbl_status.setText("Install geobridge first (API Key tab).")
-            return
         except Exception as exc:  # noqa: BLE001
             self.lbl_status.setText(f"Could not load dataset: {exc}")
             return
