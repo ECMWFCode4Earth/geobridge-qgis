@@ -580,12 +580,27 @@ class BrowseTab(QWidget):
         # monthly and have no 'day' field at all).
         has_temporal = any(f in selection for f in MULTI_FIELDS)
 
-        self.btn_download.setEnabled(has_variable and has_temporal)
+        # geobridge's LayerDescriptor (>=0.1.14) flags per-dataset whether a
+        # CDS download has actually been validated to work — CDS's own
+        # per-dataset adaptors are inconsistent enough that "the field
+        # cascade loads fine" doesn't mean a download request will actually
+        # succeed. Default to unsupported (not just "attribute missing"):
+        # an unvalidated dataset shouldn't offer a download likely to fail
+        # server-side.
+        cds_supported = bool(
+            self._descriptor and getattr(self._descriptor, "cds_download_supported", False)
+        )
+
+        self.btn_download.setEnabled(has_variable and has_temporal and cds_supported)
 
         if not has_variable:
             self.lbl_status.setText("Pick a variable.")
         elif not has_temporal:
             self.lbl_status.setText("Pick at least one date value.")
+        elif not cds_supported:
+            self.lbl_status.setText(
+                "CDS download isn't validated for this dataset yet — not available here."
+            )
         else:
             self.lbl_status.setText("")
 

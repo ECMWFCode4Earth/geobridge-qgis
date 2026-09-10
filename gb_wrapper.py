@@ -46,17 +46,18 @@ class _NullStream:
 def _quiet_stderr():
     """Temporarily swallow stderr writes for the duration of the `with` block.
 
-    gb.semantic_resources() (geobridge>=0.1.10) pulls in scikit-learn's
-    optional pandas integration; on a QGIS install whose bundled pyarrow
-    was built against NumPy 1.x, that hits numpy's own deprecated-attribute
-    shim on every single call. The shim writes a full traceback string
-    straight to sys.stderr as a side effect — bypassing Python's `warnings`
-    module entirely, so warning filters can't catch it — even though the
-    ImportError it's reporting is fully caught inside scikit-learn and
-    results still come back correctly. Left alone, this would dump a
-    scary-looking (but harmless) traceback into QGIS's log on every single
-    search. Scoped tightly to just the one call rather than swallowing
-    stderr for the plugin's whole lifetime.
+    Originally added because gb.semantic_resources() (geobridge>=0.1.10) was
+    reported to pull in scikit-learn's optional pandas integration, which on
+    some QGIS installs hit a NumPy deprecated-attribute shim that wrote a
+    scary-looking (but harmless) traceback straight to sys.stderr on every
+    call, bypassing Python's `warnings` module entirely. As of the current
+    geobridge source, semantic_resources()'s matching (geobridge/semantic/
+    catalog.py's _TfidfModel) is a hand-rolled TF-IDF/cosine implementation
+    using only math/re/collections — no numpy, pandas, pyarrow, or
+    scikit-learn anywhere in that call path anymore, so this specific
+    trigger no longer applies. Left in place as cheap, narrowly-scoped
+    insurance (just this one call, not the plugin's whole lifetime) in case
+    some other noisy import reappears here later.
     """
     original = sys.stderr
     sys.stderr = _NullStream()

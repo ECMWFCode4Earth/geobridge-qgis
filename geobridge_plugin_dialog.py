@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import csv
 import os
+import re
 from datetime import datetime, timedelta
 
 from qgis.PyQt import uic
@@ -57,9 +58,11 @@ from qgis.PyQt.QtGui import (
 )
 from qgis.PyQt.QtWidgets import QFileDialog, QLineEdit, QMessageBox
 from qgis.core import (
+    Qgis,
     QgsApplication,
     QgsCoordinateReferenceSystem,
     QgsCoordinateTransform,
+    QgsMessageLog,
     QgsProject,
     QgsRasterLayer,
     QgsVectorLayer,
@@ -95,6 +98,33 @@ PREFETCH_INTERVAL_MS = 150
 DEFAULT_WINDOW_DAYS = 3
 DEFAULT_TS_WINDOW_DAYS = 30
 TS_STEP_CHOICES = (("Daily", 1), ("Weekly", 7), ("Monthly", 30))
+
+# How long to wait after the *last* observed tile-request failure before
+# telling the user the batch had problems — QGIS's own tile loader keeps
+# retrying in the background well after _advance_prefetch's warm-up pass
+# finishes, so "done" is defined by a quiet period, not a fixed point.
+TILE_FAILURE_QUIET_MS = 4000
+# Upper bound on that wait: a "Build layers" batch that's uniformly broken
+# (e.g. every step's date is out of range) has each of its ~40 layers fail
+# a few seconds apart as _advance_prefetch cycles through them, which keeps
+# re-arming the quiet timer above and can delay the popup for the length of
+# the whole batch. This timer is armed once, on the *first* failure of a
+# batch, and isn't reset by later ones — so the user hears about it within
+# this long, no matter how long the rest of the batch keeps failing. Set
+# below TILE_FAILURE_QUIET_MS on purpose: for a batch that's still actively
+# failing, this cap is meant to be the one that actually fires (favouring a
+# fast, possibly-incomplete first popup over waiting for the whole batch to
+# go quiet) — any stragglers that fail afterward get their own follow-up
+# popup rather than being folded into a much-delayed first one.
+TILE_FAILURE_MAX_WAIT_MS = 3500
+# QGIS core (QgsTileDownloadManager) logs this exact WARNING, with no
+# category tag we can filter on, once a tile gives up retrying — see
+# https://github.com/qgis/QGIS's tiledownloadmanager.cpp. It doesn't include
+# the HTTP status, only the URL.
+TILE_FAILURE_RE = re.compile(
+    r"Tile request max retry error\. Failed \d+ requests for tile \d+ "
+    r"of tileRequest \d+ \(url: (\S+)\)"
+)
 
 
 def _disable_temporal(layer):
@@ -271,6 +301,23 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         self._prefetch_timer = QTimer(self)
         self._prefetch_timer.setInterval(PREFETCH_INTERVAL_MS)
         self._prefetch_timer.timeout.connect(self._advance_prefetch)
+
+        # Surface WMTS tile failures that would otherwise only be visible if
+        # the user happens to open View > Panels > Log Messages themselves.
+        # QGIS's own tile loader already logs a WARNING per tile that gives
+        # up retrying; we just listen for it and turn it into something the
+        # user actually sees (see _on_qgis_message_logged/_report_tile_failures).
+        self._tile_failure_urls = set()
+        self._tile_failure_timer = QTimer(self)
+        self._tile_failure_timer.setSingleShot(True)
+        self._tile_failure_timer.setInterval(TILE_FAILURE_QUIET_MS)
+        self._tile_failure_timer.timeout.connect(self._report_tile_failures)
+        # Hard cap on top of the quiet timer above — see TILE_FAILURE_MAX_WAIT_MS.
+        self._tile_failure_deadline_timer = QTimer(self)
+        self._tile_failure_deadline_timer.setSingleShot(True)
+        self._tile_failure_deadline_timer.setInterval(TILE_FAILURE_MAX_WAIT_MS)
+        self._tile_failure_deadline_timer.timeout.connect(self._report_tile_failures)
+        QgsApplication.messageLog().messageReceived.connect(self._on_qgis_message_logged)
 
         # keeps a strong reference alive while a QThread install is running
         self._installer = None
@@ -647,7 +694,34 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         # returns via this package, but it isn't part of geobridge[zarr]
         # itself (that extra only covers the ARCO/Zarr read path).
         self._installer = DependencyInstaller(
-            ["geobridge[zarr]>=0.1.13", "aiohttp", "requests", "netcdf4"]
+            # >=0.1.14: LayerDescriptor.cds_download_supported, which
+            # browse_tab._update_selection_state() gates the Download button
+            # on — datasets CDS validation hasn't confirmed working yet.
+            #
+            # numpy/pandas are pinned to the major.minor QGIS itself ships
+            # (checked directly in a QGIS 3.40.8 install's own site-packages:
+            # numpy 1.26.4, pandas 2.2.2) — `--upgrade` would otherwise
+            # happily replace QGIS's own working copies with whatever newer
+            # version geobridge[zarr]'s dependency tree (xarray/zarr/dask)
+            # is willing to accept. If a future geobridge release needs
+            # newer versions than these ranges allow, pip will fail loudly
+            # with a resolver error here instead of installing a silently-
+            # mismatched stack — re-check QGIS's bundled versions and widen
+            # the ranges when that happens, rather than dropping the pins.
+            #
+            # No pyarrow pin: confirmed by reading geobridge's own
+            # pyproject.toml that nothing in its dependency tree (base,
+            # [zarr], or [full]) requires pyarrow at all — QGIS's bundled
+            # copy (from geopandas, unrelated to this plugin) is never
+            # touched by this install, so there's nothing to protect here.
+            [
+                "geobridge[zarr]>=0.1.14",
+                "numpy>=1.26,<2",
+                "pandas>=2.2,<3",
+                "aiohttp",
+                "requests",
+                "netcdf4",
+            ]
         )
         self._installer.finished_ok.connect(self._on_core_install_done)
         self._installer.finished_err.connect(self._on_core_install_failed)
@@ -1474,6 +1548,9 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         the network. Doesn't block the UI thread: tile fetching itself
         stays asynchronous, this just kicks it off early for every step.
         """
+        self._tile_failure_urls = set()
+        self._tile_failure_timer.stop()
+        self._tile_failure_deadline_timer.stop()
         self._prefetch_index = 0
         self._prefetch_timer.start()
 
@@ -1483,6 +1560,72 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         if self._prefetch_index >= len(self._layer_ids):
             self._prefetch_timer.stop()
             self._show_time_step(0)  # land back on the first step
+
+    def _on_qgis_message_logged(self, message, tag, level):
+        """Watch QGIS's own log for WMTS tile requests that gave up retrying.
+
+        QGIS's core tile loader (not this plugin) fetches every XYZ/WMTS
+        tile and, on repeated failure, logs a "Tile request max retry
+        error" WARNING like the ones in the reported log — but only to the
+        Log Messages panel, which most users never open. This turns that
+        into a message-bar warning the user can't miss. It can't recover
+        the actual HTTP status (QGIS doesn't include it in this message),
+        only which tile URL gave up.
+
+        No level filtering here: `level` arrives as a `Qgis.MessageLevel`
+        whose comparison operators aren't reliable across every PyQt/PyQGIS
+        binding, and a raised exception inside a signal-connected slot is
+        silently swallowed by Qt (never reaches Log Messages), so an
+        unlucky comparison would silently disable this whole feature. The
+        regex itself is specific enough to not need a level pre-filter.
+        """
+        try:
+            match = TILE_FAILURE_RE.search(message)
+            if not match:
+                return
+            if not self._tile_failure_urls:
+                # First failure of a fresh batch — arm the hard cap now so
+                # a long, steadily-failing batch can't keep pushing the
+                # report back forever (see TILE_FAILURE_MAX_WAIT_MS).
+                self._tile_failure_deadline_timer.start()
+            self._tile_failure_urls.add(match.group(1))
+            self._tile_failure_timer.start()  # (re)start the quiet-period countdown
+        except Exception as exc:
+            # Deliberately caught broad: see the note above about slot
+            # exceptions vanishing silently. Logging it as our own message
+            # guarantees it's visible instead of disappearing into stderr.
+            QgsMessageLog.logMessage(
+                f"tile-failure watcher error: {exc!r}", "GeoBridge", Qgis.MessageLevel.Critical
+            )
+
+    def _report_tile_failures(self):
+        # Whichever of the two timers fired, stop the other — otherwise the
+        # one still pending would fire again later against the next batch's
+        # not-yet-complete failure count.
+        self._tile_failure_timer.stop()
+        self._tile_failure_deadline_timer.stop()
+        count = len(self._tile_failure_urls)
+        self._tile_failure_urls = set()
+        if count == 0:
+            return
+        summary = (
+            f"{count} WMTS tile request{'s' if count != 1 else ''} failed after "
+            f"retrying and were left blank on the map. This is the ECMWF WMTS "
+            f"server refusing/timing out the request, not a problem with your "
+            f"selection — see View → Panels → Log Messages for the exact "
+            f"URLs, or try Build layers again in a bit."
+        )
+        QgsMessageLog.logMessage(summary, "GeoBridge", Qgis.MessageLevel.Warning)
+        self.iface.messageBar().pushWarning("GeoBridge", summary)
+
+        # The message-bar banner is easy to miss if the user has already
+        # looked away from QGIS's main window (e.g. this dialog is pinned
+        # on top of it) — a blocking popup guarantees they actually see it.
+        # Skipped if this dialog itself isn't visible (closed/hidden): a
+        # modal box anchored to a hidden parent is confusing, and the log
+        # line + banner above still cover that case.
+        if self.isVisible():
+            QMessageBox.warning(self, "GeoBridge", summary)
 
     def _toggle_play(self):
         if self._playing:
@@ -1956,6 +2099,8 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
     def reject(self):
         self._stop_play()
         self._prefetch_timer.stop()
+        self._tile_failure_timer.stop()
+        self._tile_failure_deadline_timer.stop()
         self.btn_pick_point.setChecked(False)
         self._reset_aoi_tool_if_active()
         super(GeoBridgePluginDialog, self).reject()
@@ -1963,6 +2108,8 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
     def closeEvent(self, event):
         self._stop_play()
         self._prefetch_timer.stop()
+        self._tile_failure_timer.stop()
+        self._tile_failure_deadline_timer.stop()
         self.btn_pick_point.setChecked(False)
         self._reset_aoi_tool_if_active()
         super(GeoBridgePluginDialog, self).closeEvent(event)
@@ -1971,6 +2118,14 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         """Remove all plugin-created layers/groups. Called from plugin.unload()."""
         self._stop_play()
         self._prefetch_timer.stop()
+        self._tile_failure_timer.stop()
+        self._tile_failure_deadline_timer.stop()
+        try:
+            QgsApplication.messageLog().messageReceived.disconnect(
+                self._on_qgis_message_logged
+            )
+        except (TypeError, RuntimeError):
+            pass
         if self._ts_task is not None:
             # Same guard as _start_ts_fetch(): if a previous fetch already
             # finished, QGIS may have deleted its underlying C++ object
