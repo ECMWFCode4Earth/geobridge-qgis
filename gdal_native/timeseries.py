@@ -26,7 +26,6 @@ from __future__ import annotations
 import json
 import logging
 import math
-import re
 import time
 import urllib.error
 import urllib.request
@@ -199,38 +198,24 @@ def _nearest_index(coord_array, target: float) -> int:
 
 
 def _time_bounds_indices(time_array, start: DateLike, end: DateLike):
-    """Return (start_idx, end_idx) inclusive, covering [start, end] in the
-    store's own time coordinate — same unit-parsing as extract_gdal's
-    _find_time_index, generalised to a range."""
-    import numpy as np
+    """Return (start_idx, end_idx inclusive, TimeGrid) covering [start, end]
+    in the store's own time coordinate.
 
-    attrs = {a.GetName(): a.Read() for a in time_array.GetAttributes()}
-    unit_str = attrs.get("units") or attrs.get("unit") or "days since 1970-01-01"
-    m = re.match(r"(\w+)\s+since\s+(.+)", unit_str.strip())
-    if not m:
-        raise TimeSeriesError(f"Unrecognised time unit on Zarr store: {unit_str!r}")
-    unit_name, epoch_str = m.group(1).lower(), m.group(2).strip()
-    epoch = datetime.fromisoformat(epoch_str.replace("Z", "+00:00").split("+")[0])
-    unit_seconds = {"days": 86400, "hours": 3600, "minutes": 60, "seconds": 1}.get(
-        unit_name.rstrip("s") + "s", 86400
-    )
+    Uses extract_gdal.TimeGrid rather than reading the full time array —
+    confirmed by timing it directly (see TimeGrid's docstring) that a full
+    read of a 13440-element time coordinate on the "timeChunked" ARCO
+    flavour takes ~2 minutes (many tiny chunks), while any 1-2 element
+    read takes under a second; TimeGrid computes every index/timestamp
+    arithmetically from just the first two values instead.
+    """
+    from .extract_gdal import TimeGrid
 
-    def _to_value(dt_like: DateLike) -> float:
-        if isinstance(dt_like, datetime):
-            dt = dt_like
-        else:
-            s = str(dt_like)
-            dt = datetime.fromisoformat(s.replace("Z", "+00:00").split("+")[0])
-        return (dt - epoch).total_seconds() / unit_seconds
-
-    values = time_array.ReadAsArray()
-    start_val, end_val = _to_value(start), _to_value(end)
-    idx = np.where((values >= start_val) & (values <= end_val))[0]
-    if len(idx) == 0:
-        raise TimeSeriesError(
-            f"No timesteps found between {start!r} and {end!r} in this Zarr store."
-        )
-    return int(idx[0]), int(idx[-1]), values
+    grid = TimeGrid.read(time_array)
+    start_idx = grid.index_for(start)
+    end_idx = grid.index_for(end)
+    if end_idx < start_idx:
+        raise TimeSeriesError(f"No timesteps found between {start!r} and {end!r} in this Zarr store.")
+    return start_idx, end_idx, grid
 
 
 def zarr_point_time_series(
@@ -294,7 +279,7 @@ def zarr_point_time_series(
 
         lat_idx = _nearest_index(lat_array, lat)
         lon_idx = _nearest_index(lon_array, lon)
-        t_start, t_end, time_values = _time_bounds_indices(time_array, start, end)
+        t_start, t_end, time_grid = _time_bounds_indices(time_array, start, end)
 
         index_slice = []
         for i, name in enumerate(dim_names):
@@ -310,29 +295,15 @@ def zarr_point_time_series(
         sliced = array[tuple(index_slice)]
         raw_values = sliced.ReadAsArray()
 
-        epoch, unit_seconds = _epoch_and_unit(time_array)
         samples = []
         for offset, raw in enumerate(raw_values):
-            t_val = time_values[t_start + offset]
-            py_time = epoch + timedelta(seconds=float(t_val) * unit_seconds)
+            py_time = time_grid.timestamp_at(t_start + offset)
             py_value = None if (raw is None or _is_nan(raw)) else float(raw)
             samples.append(PointSample(time=py_time, value=py_value))
         return samples
     finally:
         for key, val in prev.items():
             gdal.SetConfigOption(key, val)
-
-
-def _epoch_and_unit(time_array):
-    attrs = {a.GetName(): a.Read() for a in time_array.GetAttributes()}
-    unit_str = attrs.get("units") or attrs.get("unit") or "days since 1970-01-01"
-    m = re.match(r"(\w+)\s+since\s+(.+)", unit_str.strip())
-    unit_name, epoch_str = m.group(1).lower(), m.group(2).strip()
-    epoch = datetime.fromisoformat(epoch_str.replace("Z", "+00:00").split("+")[0])
-    unit_seconds = {"days": 86400, "hours": 3600, "minutes": 60, "seconds": 1}.get(
-        unit_name.rstrip("s") + "s", 86400
-    )
-    return epoch, unit_seconds
 
 
 def _is_nan(value) -> bool:

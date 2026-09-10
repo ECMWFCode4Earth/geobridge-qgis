@@ -30,6 +30,7 @@ from __future__ import annotations
 import re
 import tempfile
 import zipfile
+from datetime import timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -256,16 +257,14 @@ _LAT_TOKENS = ("latitude", "lat", "rlat", "grid_latitude", "y")
 _LON_TOKENS = ("longitude", "lon", "rlon", "grid_longitude", "x")
 
 
-def _find_time_index(time_array: "gdal.MDArray", time_value: str) -> int:
-    """Resolve an ISO datetime string to the nearest index in *time_array*,
-    using its `units`/`unit` attribute ("<days|hours|seconds> since <epoch>",
-    CF convention) — same convention the ARCO store's own time coordinate
+def _parse_time_unit(time_array: "gdal.MDArray"):
+    """Return (epoch: datetime, unit_seconds: int) from *time_array*'s
+    `units`/`unit` attribute ("<days|hours|seconds> since <epoch>", CF
+    convention) — same convention the ARCO store's own time coordinate
     uses (verified: "days since 1970-01-01" during this branch's testing).
     """
     import re as _re
-    from datetime import datetime, timedelta
-
-    import numpy as np
+    from datetime import datetime
 
     attrs = {a.GetName(): a.Read() for a in time_array.GetAttributes()}
     unit_str = attrs.get("units") or attrs.get("unit") or "days since 1970-01-01"
@@ -274,26 +273,150 @@ def _find_time_index(time_array: "gdal.MDArray", time_value: str) -> int:
         raise ExtractError(f"Unrecognised time unit on Zarr store: {unit_str!r}")
     unit_name, epoch_str = m.group(1).lower(), m.group(2).strip()
     epoch = datetime.fromisoformat(epoch_str.replace("Z", "+00:00").split("+")[0])
-
-    target = datetime.fromisoformat(time_value.replace("Z", "+00:00").split("+")[0])
-    delta = target - epoch
     unit_seconds = {"days": 86400, "hours": 3600, "minutes": 60, "seconds": 1}.get(
         unit_name.rstrip("s") + "s", 86400
     )
-    target_value = delta.total_seconds() / unit_seconds
+    return epoch, unit_seconds
 
-    values = time_array.ReadAsArray()
-    idx = int(np.argmin(np.abs(values - target_value)))
-    return idx
+
+def _datetime_to_time_value(dt_like, epoch, unit_seconds) -> float:
+    from datetime import datetime as _datetime
+    if isinstance(dt_like, _datetime):
+        dt = dt_like
+    else:
+        dt = _datetime.fromisoformat(str(dt_like).replace("Z", "+00:00").split("+")[0])
+    return (dt - epoch).total_seconds() / unit_seconds
+
+
+class TimeGrid:
+    """A time coordinate's (epoch, unit_seconds, start_value, step, length)
+    — enough to compute any index/timestamp arithmetically.
+
+    Deliberately avoids ever reading the full time coordinate array: on
+    the "timeChunked" ARCO flavour (short time-run per chunk — the one
+    the bbox+range export path needs, for the opposite reason a point
+    query wants "geoChunked"), the time coordinate mirrors that same
+    fine chunking, so a full read touches thousands of tiny chunks —
+    confirmed by timing it directly: 13440 elements via .ReadAsArray()
+    took 119s, while reading any 1-2 elements at an arbitrary position
+    took under a second. This assumes evenly-spaced steps, which is true
+    for every ARCO time coordinate checked so far (confirmed against real
+    data: three widely-separated single-element reads all landed exactly
+    on start + index*step).
+    """
+
+    def __init__(self, epoch, unit_seconds, start_value, step, length):
+        self.epoch = epoch
+        self.unit_seconds = unit_seconds
+        self.start_value = start_value
+        self.step = step
+        self.length = length
+
+    @classmethod
+    def read(cls, time_array: "gdal.MDArray") -> "TimeGrid":
+        epoch, unit_seconds = _parse_time_unit(time_array)
+        length = time_array.GetDimensions()[0].GetSize()
+        first_two = time_array[0:min(2, length)].ReadAsArray()
+        start_value = float(first_two[0])
+        step = float(first_two[1] - first_two[0]) if length > 1 else 0.0
+        return cls(epoch, unit_seconds, start_value, step, length)
+
+    def index_for(self, dt_like) -> int:
+        target = _datetime_to_time_value(dt_like, self.epoch, self.unit_seconds)
+        if self.step == 0:
+            return 0
+        idx = round((target - self.start_value) / self.step)
+        return max(0, min(self.length - 1, idx))
+
+    def timestamp_at(self, index: int):
+        value = self.start_value + index * self.step
+        # round() the seconds: floating-point day/hour-fraction arithmetic
+        # otherwise leaves sub-second noise (confirmed: ~1.4ms) on what are
+        # exact on-the-hour timestamps in every real ARCO store checked.
+        return self.epoch + timedelta(seconds=round(value * self.unit_seconds))
+
+
+def _find_time_index(time_array: "gdal.MDArray", time_value: str) -> int:
+    """Resolve an ISO datetime string to the nearest index in *time_array*."""
+    return TimeGrid.read(time_array).index_for(time_value)
+
+
+def _time_range_indices(time_array: "gdal.MDArray", start, end):
+    """Return (start_idx, end_idx inclusive, TimeGrid) covering [start, end]
+    in *time_array*'s own coordinate."""
+    grid = TimeGrid.read(time_array)
+    start_idx = grid.index_for(start)
+    end_idx = grid.index_for(end)
+    if end_idx < start_idx:
+        raise ExtractError(f"No timesteps found between {start!r} and {end!r} in this Zarr store.")
+    return start_idx, end_idx, grid
+
+
+def _coord_index_bounds(coord_array: "gdal.MDArray", lo: float, hi: float):
+    """Return (start_idx, end_idx inclusive, values) of *coord_array*
+    covering [lo, hi] — with a 1-cell margin on each side so a following
+    exact Warp crop always has real data up to the requested edge, and
+    handling a descending coordinate (common for latitude, high-to-low)
+    by sorting the matched positions rather than assuming ascending
+    order. Returns the full coordinate array too (already read to find
+    the bounds) so the caller can build a geotransform from real values —
+    see _geotransform_from_coords for why that's necessary here."""
+    import numpy as np
+
+    values = coord_array.ReadAsArray()
+    matches = np.where((values >= min(lo, hi)) & (values <= max(lo, hi)))[0]
+    if len(matches) == 0:
+        # Nothing exactly inside the range — fall back to the single
+        # nearest index so a small/edge bbox still returns *something*
+        # rather than an empty selection.
+        mid = (lo + hi) / 2
+        nearest = int(np.argmin(np.abs(values - mid)))
+        return nearest, nearest, values
+    start_idx = max(0, int(matches.min()) - 1)
+    end_idx = min(len(values) - 1, int(matches.max()) + 1)
+    return start_idx, end_idx, values
+
+
+def _geotransform_from_coords(lat_values, lat_lo: int, lon_values, lon_lo: int):
+    """Build a geotransform directly from real coordinate values, for the
+    (lat_lo:..., lon_lo:...) sub-window — bypassing AsClassicDataset's own
+    geotransform inference.
+
+    Necessary because AsClassicDataset returns a bogus identity
+    geotransform (origin (0,0), 1-degree pixels) when BOTH spatial
+    dimensions are simultaneously range-sliced — confirmed by testing:
+    a single-axis-sliced 2-D view (zarr_to_geotiff's case, only time
+    sliced to one index, lat/lon kept as a bare ":" full slice) gets a
+    correct geotransform; slicing lat AND lon to sub-ranges together
+    (this function's case, needed to avoid downloading a whole
+    region's worth of chunks for a tight bbox) does not.
+
+    Matches the convention already confirmed correct for a full-extent
+    slice in this same store (ascending lat/lon index order, positive
+    pixel height - "south-up" storage; the final gdal.Warp step already
+    normalises orientation regardless, same as the single-instant path).
+    """
+    lat_step = float(lat_values[1] - lat_values[0]) if len(lat_values) > 1 else 0.1
+    lon_step = float(lon_values[1] - lon_values[0]) if len(lon_values) > 1 else 0.1
+    origin_x = float(lon_values[lon_lo]) - 0.5 * lon_step
+    origin_y = float(lat_values[lat_lo]) - 0.5 * lat_step
+    return (origin_x, lon_step, 0.0, origin_y, 0.0, lat_step)
 
 
 def _spatial_axis_indices(dim_names: list) -> tuple:
     """Return (x_local_index, y_local_index) into a 2-remaining-dimension
     slice, identified by name rather than assumed position — mirrors
-    geobridge's own _spatial_dims() name-matching approach."""
+    geobridge's own _spatial_dims() name-matching approach.
+
+    Substring match, not exact: GDAL renames a dimension that was actually
+    range-sliced (not a bare ":" full slice) to something like
+    "subset_latitude_99_1_102" rather than keeping "latitude" — confirmed
+    by testing zarr_range_to_geotiff's bbox-restricted read, which an
+    exact-equality version of this check missed entirely.
+    """
     lower = [n.lower() for n in dim_names]
-    x_idx = next((i for i, n in enumerate(lower) if n in _LON_TOKENS), None)
-    y_idx = next((i for i, n in enumerate(lower) if n in _LAT_TOKENS), None)
+    x_idx = next((i for i, n in enumerate(lower) if any(t in n for t in _LON_TOKENS)), None)
+    y_idx = next((i for i, n in enumerate(lower) if any(t in n for t in _LAT_TOKENS)), None)
     if x_idx is None or y_idx is None:
         raise ExtractError(
             f"Could not identify latitude/longitude among dimensions {dim_names!r}"
@@ -387,6 +510,193 @@ def zarr_to_geotiff(
             classic_ds.SetSpatialRef(_wgs84_srs())
 
         return _write_geotiff(classic_ds, bbox, output_path, cog=cog)
+    finally:
+        for key, val in prev.items():
+            gdal.SetConfigOption(key, val)
+
+
+# ---------------------------------------------------------------------------
+# Public: ARCO Zarr, a time RANGE (+ optional binned aggregation) -> GeoTIFF
+# ---------------------------------------------------------------------------
+
+_BIN_KEY = {
+    "daily": lambda dt: (dt.year, dt.month, dt.day),
+    "monthly": lambda dt: (dt.year, dt.month),
+    "annual": lambda dt: (dt.year,),
+}
+_BIN_LABEL = {
+    "daily": lambda dt: dt.strftime("%Y-%m-%d"),
+    "monthly": lambda dt: dt.strftime("%Y-%m"),
+    "annual": lambda dt: dt.strftime("%Y"),
+}
+_REDUCERS = {"mean": "mean", "max": "max", "min": "min"}
+
+
+def zarr_range_to_geotiff(
+    zarr_url: str,
+    variable: str,
+    time_range: tuple,
+    bbox: Optional[tuple],
+    output_path: Path,
+    aggregation: str = "raw",
+    auth_header: Optional[dict] = None,
+    cog: bool = True,
+) -> Path:
+    """Read one variable over a time RANGE from a remote ARCO Zarr store
+    and write a (usually multi-band) GeoTIFF — the Search tab's "Export to
+    GeoTIFF" feature. Companion to zarr_to_geotiff() (one instant) and
+    zarr_point_time_series() (one point, full range); this is the third
+    combination, a bbox over a range.
+
+    *aggregation*: "raw" writes one band per timestep found in the range
+    (band description = that timestep's ISO string). Otherwise
+    "<daily|monthly|annual>_<mean|max|min>" groups timesteps into that
+    bin and reduces each bin with that statistic — one band per bin
+    (description = the bin's date/month/year), matching
+    export_utils.AGGREGATION_LABELS' 9 modes exactly.
+
+    Reads only the index range actually covering *bbox* (not the whole
+    store) to avoid pulling a huge, mostly-irrelevant extent over the
+    network for a tight crop — same reasoning as fetching chunked slices
+    lazily. A final gdal.Warp crop to the exact bbox edges still runs
+    afterward (see _write_geotiff), same as the single-instant path.
+    """
+    import numpy as np
+
+    if aggregation != "raw":
+        bin_kind, _, reducer = aggregation.partition("_")
+        if bin_kind not in _BIN_KEY or reducer not in _REDUCERS:
+            raise ExtractError(
+                f"Unrecognised aggregation {aggregation!r}. Expected 'raw' or "
+                f"'<daily|monthly|annual>_<mean|max|min>'."
+            )
+
+    headers_opt = ",".join(f"{k}: {v}" for k, v in auth_header.items()) if auth_header else None
+    connection = f'ZARR:"/vsicurl/{zarr_url}"'
+
+    config = {"GDAL_PAM_ENABLED": "NO"}
+    if headers_opt:
+        config["GDAL_HTTP_HEADERS"] = headers_opt
+
+    prev = {}
+    for key, val in config.items():
+        prev[key] = gdal.GetConfigOption(key)
+        gdal.SetConfigOption(key, val)
+    try:
+        root = gdal.OpenEx(connection, gdal.OF_MULTIDIM_RASTER)
+        if root is None:
+            raise ExtractError(f"GDAL could not open Zarr store: {zarr_url}")
+
+        group = root.GetRootGroup()
+        array = group.OpenMDArray(variable)
+        if array is None:
+            raise ExtractError(
+                f"Variable '{variable}' not found in Zarr store. "
+                f"Available: {group.GetMDArrayNames()}"
+            )
+
+        dims = array.GetDimensions()
+        dim_names = [d.GetName() for d in dims]
+        lower = [n.lower() for n in dim_names]
+
+        lat_i = next((i for i, n in enumerate(lower) if n in _LAT_TOKENS), None)
+        lon_i = next((i for i, n in enumerate(lower) if n in _LON_TOKENS), None)
+        time_i = next((i for i, n in enumerate(lower) if n == "time"), None)
+        if lat_i is None or lon_i is None or time_i is None:
+            raise ExtractError(
+                f"Could not identify latitude/longitude/time among dimensions {dim_names!r}"
+            )
+
+        time_array = group.OpenMDArray(dim_names[time_i])
+        t_start, t_end, time_grid = _time_range_indices(
+            time_array, time_range[0], time_range[1]
+        )
+
+        lat_array = group.OpenMDArray(dim_names[lat_i])
+        lon_array = group.OpenMDArray(dim_names[lon_i])
+        if bbox:
+            west, south, east, north = bbox
+            lat_lo, lat_hi, lat_values = _coord_index_bounds(lat_array, south, north)
+            lon_lo, lon_hi, lon_values = _coord_index_bounds(lon_array, west, east)
+        else:
+            lat_values = lat_array.ReadAsArray()
+            lon_values = lon_array.ReadAsArray()
+            lat_lo, lat_hi = 0, len(lat_values) - 1
+            lon_lo, lon_hi = 0, len(lon_values) - 1
+
+        index_slice = []
+        for i, name in enumerate(dim_names):
+            if i == time_i:
+                index_slice.append(slice(t_start, t_end + 1))
+            elif i == lat_i:
+                index_slice.append(slice(lat_lo, lat_hi + 1))
+            elif i == lon_i:
+                index_slice.append(slice(lon_lo, lon_hi + 1))
+            else:
+                index_slice.append(0)
+
+        sliced = array[tuple(index_slice)]
+        # Note: GDAL renames a range-sliced dimension (e.g. "time" becomes
+        # something like "subset_time_13344_1_6") rather than keeping the
+        # original name, so only dimension *count* is checked here — order
+        # is still guaranteed to be [time, lat, lon] since that's the fixed
+        # relative order of the three axes left un-collapsed (any others
+        # were sliced to a single index above, which drops them entirely).
+        if sliced.GetDimensionCount() != 3:
+            raise ExtractError(
+                f"'{variable}' has {sliced.GetDimensionCount()} dimensions after "
+                f"slicing (expected 3: time, lat, lon)."
+            )
+
+        cube = sliced.ReadAsArray()  # (ntime, nlat, nlon) — see dim-order
+        # assumption in the comment below.
+
+        # Built directly from real coordinate values, not AsClassicDataset —
+        # see _geotransform_from_coords' docstring for why (it returns a
+        # bogus identity geotransform when both spatial axes are range-
+        # sliced together, confirmed by testing this exact code path).
+        geotransform = _geotransform_from_coords(lat_values, lat_lo, lon_values, lon_lo)
+        srs = _wgs84_srs()
+        # cube's axis order is (time, lat, lon) because that's dim_names'
+        # relative order in every ARCO dataset checked so far (time,
+        # [elevation/level], latitude, longitude) — any other dims were
+        # sliced to a single index above, which drops them, leaving the
+        # three kept axes in their original relative order.
+
+        timestamps = [time_grid.timestamp_at(t_start + offset) for offset in range(cube.shape[0])]
+
+        if aggregation == "raw":
+            band_arrays = [cube[t] for t in range(cube.shape[0])]
+            band_labels = [dt.strftime("%Y-%m-%dT%H:%M:%SZ") for dt in timestamps]
+        else:
+            bin_kind, _, reducer = aggregation.partition("_")
+            key_fn = _BIN_KEY[bin_kind]
+            label_fn = _BIN_LABEL[bin_kind]
+            reduce_fn = getattr(np, reducer)
+
+            bins: dict = {}  # key -> (label, [slice indices into cube axis 0])
+            for offset, dt in enumerate(timestamps):
+                key = key_fn(dt)
+                bins.setdefault(key, (label_fn(dt), []))[1].append(offset)
+
+            band_arrays = []
+            band_labels = []
+            for key in sorted(bins):
+                label, offsets = bins[key]
+                band_arrays.append(reduce_fn(cube[offsets, :, :], axis=0))
+                band_labels.append(f"{label} ({reducer})")
+
+        mem_ds = gdal.GetDriverByName("MEM").Create(
+            "", cube.shape[2], cube.shape[1], len(band_arrays), gdal.GDT_Float32,
+        )
+        mem_ds.SetGeoTransform(geotransform)
+        mem_ds.SetSpatialRef(srs)
+        for i, (arr, label) in enumerate(zip(band_arrays, band_labels), start=1):
+            band = mem_ds.GetRasterBand(i)
+            band.WriteArray(np.asarray(arr, dtype="float32"))
+            band.SetDescription(label)
+
+        return _write_geotiff(mem_ds, bbox, output_path, cog=cog)
     finally:
         for key, val in prev.items():
             gdal.SetConfigOption(key, val)
