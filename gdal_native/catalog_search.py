@@ -26,6 +26,12 @@ from pathlib import Path
 from .discover import _load_arco_snapshot
 
 _OVERRIDES_PATH = Path(__file__).parent.parent / "catalog_data" / "arco_overrides.json"
+_VOCABULARY_PATH = Path(__file__).parent.parent / "catalog_data" / "vocabulary.json"
+
+# How much a curated use-case match (e.g. "urban heat island" -> the exact
+# ERA5 t2m/monthly_mean recipe) outweighs a plain text-similarity hit on
+# the same (dataset, variable) pair when both fire for the same query.
+_USE_CASE_BOOST = 2.0
 
 _TOKEN_RE = re.compile(r"\b\w\w+\b", re.UNICODE)
 
@@ -40,6 +46,14 @@ _STOP_WORDS = frozenset({
 
 @dataclass(frozen=True)
 class CorpusEntry:
+    dataset_id: str
+    variable: str
+    text: str
+
+
+@dataclass(frozen=True)
+class UseCaseEntry:
+    use_case_id: str
     dataset_id: str
     variable: str
     text: str
@@ -121,6 +135,85 @@ def _load_variable_aliases() -> dict:
     return aliases
 
 
+@lru_cache(maxsize=1)
+def load_vocabulary() -> dict:
+    """The curated domain vocabulary — {"themes", "use_cases",
+    "compatibility_rules"} — converted from geobridge's own
+    vocabulary.yaml. {} if the bundled file is missing."""
+    if not _VOCABULARY_PATH.exists():
+        return {}
+    with _VOCABULARY_PATH.open(encoding="utf-8") as fp:
+        return json.load(fp) or {}
+
+
+def use_case_labels() -> dict:
+    """{use_case_id: human-readable label} for every curated use case."""
+    use_cases = load_vocabulary().get("use_cases") or {}
+    return {uc_id: uc.get("label", uc_id) for uc_id, uc in use_cases.items()}
+
+
+def use_case_detail(use_case_id: str) -> dict:
+    """Full curated entry for one use case (label, typical_question,
+    recommended_access/aggregation/style, notes, ...) — {} if unknown."""
+    return (load_vocabulary().get("use_cases") or {}).get(use_case_id) or {}
+
+
+def _build_use_case_corpus() -> list:
+    """One document per curated use case: its own label/typical_question/
+    notes plus its parent theme's label and synonym list, so a query like
+    "urban heat" (a theme synonym) still finds "Urban heat island
+    assessment" (a use case under that theme) even though "urban heat"
+    itself never appears in the use case's own text."""
+    vocabulary = load_vocabulary()
+    themes = vocabulary.get("themes") or {}
+    use_cases = vocabulary.get("use_cases") or {}
+
+    entries = []
+    for uc_id, uc in use_cases.items():
+        dataset_id = uc.get("dataset")
+        variable = uc.get("variable")
+        if not dataset_id or not variable:
+            continue
+        theme = themes.get(uc.get("theme"), {})
+        parts = [
+            uc.get("label", ""),
+            uc.get("typical_question", ""),
+            uc.get("notes", ""),
+            theme.get("label", ""),
+            " ".join(theme.get("synonyms") or []),
+        ]
+        text = " ".join(p for p in parts if p)
+        entries.append(UseCaseEntry(use_case_id=uc_id, dataset_id=dataset_id, variable=variable, text=text))
+    return entries
+
+
+@lru_cache(maxsize=1)
+def _load_use_case_index():
+    entries = _build_use_case_corpus()
+    if not entries:
+        return entries, None
+    model = _TfidfModel.fit([e.text for e in entries])
+    return entries, model
+
+
+def match_use_cases(query: str, top_k: int = 10) -> list:
+    """Rank curated use cases by TF-IDF cosine similarity to *query*.
+    Returns up to top_k (use_case_id, dataset_id, variable, score) tuples,
+    score-descending, score > 0 only."""
+    entries, model = _load_use_case_index()
+    if not entries or model is None:
+        return []
+
+    scores = model.similarities(model.transform_query(query))
+    hits = [
+        (entry.use_case_id, entry.dataset_id, entry.variable, float(score))
+        for entry, score in zip(entries, scores)
+        if score > 0
+    ]
+    hits.sort(key=lambda hit: hit[3], reverse=True)
+    return hits[:top_k]
+
+
 def _build_corpus_entries() -> list:
     aliases = _load_variable_aliases()
     datasets = _load_arco_snapshot()
@@ -174,3 +267,40 @@ def query_catalog(query: str, top_k: int = 15) -> list:
 
     ranked = sorted(best.items(), key=lambda item: item[1], reverse=True)
     return [(dataset_id, variable, score) for (dataset_id, variable), score in ranked[:top_k]]
+
+
+def search(query: str, top_k: int = 15) -> list:
+    """Combined free-text + curated-use-case search — what powers the
+    Search tab. Text-similarity hits (query_catalog) and curated use-case
+    hits (match_use_cases) are merged on (dataset_id, variable): a use-case
+    match boosts that pair's score (_USE_CASE_BOOST) and tags it with the
+    use case's id, and a curated pair with no text-similarity hit at all
+    still surfaces on the strength of its use-case match alone — the
+    curated data uses its own vocabulary (theme synonyms, typical
+    questions), so a domain phrase like "urban heat island" may score 0
+    against dataset/variable descriptions yet still have an exact curated
+    recipe for it.
+
+    Returns up to top_k (dataset_id, variable, score, use_case_ids) tuples,
+    score-descending, score in [0, 1] — the UI shows this as "Confidence".
+    """
+    text_hits = {(ds, var): score for ds, var, score in query_catalog(query, top_k=max(top_k * 3, 30))}
+    uc_hits = match_use_cases(query, top_k=max(top_k, 10))
+
+    use_cases_by_pair: dict = {}
+    combined = dict(text_hits)
+    for uc_id, ds, var, uc_score in uc_hits:
+        key = (ds, var)
+        use_cases_by_pair.setdefault(key, []).append(uc_id)
+        combined[key] = combined.get(key, 0.0) + _USE_CASE_BOOST * uc_score
+
+    # text_score and uc_score are each cosine similarities in [0, 1], so a
+    # use-case boost can push their sum past 1.0 — clamp rather than
+    # rescale the whole range, so an ordinary text-only match (the common
+    # case, never boosted) keeps the same score it always had; only the
+    # rarer boosted-past-1.0 cases actually change, down to exactly 1.0.
+    ranked = sorted(combined.items(), key=lambda item: item[1], reverse=True)
+    return [
+        (dataset_id, variable, min(score, 1.0), use_cases_by_pair.get((dataset_id, variable), []))
+        for (dataset_id, variable), score in ranked[:top_k]
+    ]

@@ -78,10 +78,23 @@
       <rect><x>10</x><y>196</y><width>520</width><height>60</height></rect>
      </property>
      <property name="text">
-      <string>Get a free key by registering at cds.climate.copernicus.eu and copying your personal access token from your profile page.</string>
+      <string>Get a free key by registering/signing in at &lt;a href=&quot;https://cds.climate.copernicus.eu&quot;&gt;cds.climate.copernicus.eu&lt;/a&gt; and copying your personal access token from your profile page.</string>
      </property>
      <property name="wordWrap"><bool>true</bool></property>
+     <property name="openExternalLinks"><bool>true</bool></property>
+     <property name="textInteractionFlags"><set>Qt::TextBrowserInteraction</set></property>
      <property name="styleSheet"><string>color: #666;</string></property>
+    </widget>
+
+    <widget class="QLabel" name="lbl_api_key_quickstart">
+     <property name="geometry">
+      <rect><x>10</x><y>10</y><width>520</width><height>24</height></rect>
+     </property>
+     <property name="text">
+      <string>⚡ &lt;a href=&quot;https://geobridge-qgis.readthedocs.io/en/latest/api_key_tab.html&quot;&gt;Get your API key in under 30 seconds — click here to see how&lt;/a&gt;</string>
+     </property>
+     <property name="openExternalLinks"><bool>true</bool></property>
+     <property name="textInteractionFlags"><set>Qt::TextBrowserInteraction</set></property>
     </widget>
 
    </widget>
@@ -186,12 +199,18 @@
       <property name="geometry">
        <rect><x>100</x><y>104</y><width>260</width><height>26</height></rect>
       </property>
+      <property name="toolTip">
+       <string>Selecting a layer here doesn't apply it by itself — click "Use extent" to actually set it as the area of interest.</string>
+      </property>
      </widget>
      <widget class="QPushButton" name="btn_use_layer_extent">
       <property name="geometry">
        <rect><x>370</x><y>104</y><width>150</width><height>26</height></rect>
       </property>
       <property name="text"><string>Use extent</string></property>
+      <property name="toolTip">
+       <string>Click this after picking a layer above to apply its bounding box as the area of interest.</string>
+      </property>
      </widget>
 
      <widget class="QLabel" name="lbl_aoi_method">
@@ -425,7 +444,7 @@
      </property>
      <property name="text"><string>Full history (Zarr, needs auth)</string></property>
      <property name="toolTip">
-      <string>Bulk read from the ARCO Zarr archive in one go. Requires geobridge[zarr] and an authenticated CDS API key. Best for long/dense ranges (years of data).</string>
+      <string>Bulk read from the ARCO Zarr archive in one go. Requires an authenticated CDS API key. Best for long/dense ranges (years of data).</string>
      </property>
     </widget>
 

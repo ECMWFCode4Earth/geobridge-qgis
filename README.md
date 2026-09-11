@@ -14,6 +14,11 @@
   <img alt="Open issues" src="https://img.shields.io/github/issues/ECMWFCode4Earth/geobridge-qgis" />
 </p>
 
+> **Disclaimer:** GeoBridge was built by the participants listed under [Authors](#-authors)
+> as a project for [ECMWF's Code for Earth](https://codeforearth.ecmwf.int/) program. It is an
+> independent community contribution — **not an official ECMWF product**, and not maintained or
+> supported by ECMWF.
+
 A QGIS 3 plugin that wraps the [geobridge](https://github.com/ECMWFCode4Earth/GeoBridge)
 Python library: enter a Copernicus CDS API key once, semantically search for a use case
 ("urban heat island", "PM2.5 exposure"), and preview the recommended dataset as a
@@ -126,6 +131,10 @@ builds a WMS-provider URI that QGIS cannot reliably parse against ECMWF's WMTS s
 MIT. See `LICENSE`.
 
 ## 👥 Authors
+
+Built during [ECMWF's Code for Earth](https://codeforearth.ecmwf.int/) program. This is an
+independent participant project, not an official ECMWF product, and it isn't maintained or
+supported by ECMWF.
 
 **Mentors**
 - Angel Lopez Alos

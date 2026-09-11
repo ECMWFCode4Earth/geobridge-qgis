@@ -25,3 +25,4 @@ Plugin source: https://github.com/ECMWFCode4Earth/geobridge-qgis
    search_tab
    browse_tab
    time_series_tab
+   arco_zarr

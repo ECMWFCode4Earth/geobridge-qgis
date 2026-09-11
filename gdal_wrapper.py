@@ -85,48 +85,46 @@ def is_authenticated() -> bool:
 # ---------------------------------------------------------------------------
 
 class SemanticMatch:
-    """One free-text search hit — dataset_id/variable/confidence, matching
+    """One search hit — dataset_id/variable/confidence/use_cases, matching
     the fields _populate_results in geobridge_plugin_dialog.py reads.
 
-    Unlike geobridge's ResourceMatch, there is no `themes`/`use_cases`
-    here: this plugin only ports catalog_search's TF-IDF ranking (already
-    pure stdlib in geobridge), not the curated ~40-use-case rule engine
-    (engine.py, which duplicates a lot of the same YAML-loading machinery
-    for a feature this plugin's Search tab treats as a nice-to-have
-    "Use case" column, not core functionality). `use_cases` stays an
-    empty list so that column just reads "—" instead of a label.
+    `use_cases` holds the ids of any curated use cases (vocabulary.json,
+    ported from geobridge's own use-case vocabulary) whose theme synonyms
+    or label/typical_question matched the query and point at this
+    (dataset_id, variable) pair — usually empty, since most results come
+    from catalog_search's generic TF-IDF text matching alone.
     """
 
     __slots__ = ("dataset_id", "variable", "confidence", "use_cases")
 
-    def __init__(self, dataset_id: str, variable: str, confidence: float):
+    def __init__(self, dataset_id: str, variable: str, confidence: float, use_cases: Optional[list] = None):
         self.dataset_id = dataset_id
         self.variable = variable
         self.confidence = confidence
-        self.use_cases: list = []
+        self.use_cases: list = list(use_cases or [])
 
 
 def semantic_resources(query: str, max_results: int = 15, min_confidence: float = 0.1) -> list:
     """Return a list of SemanticMatch, unsorted (caller sorts) — powers the
     Search tab. min_confidence is applied here since catalog_search.
-    query_catalog() doesn't take that parameter itself."""
-    hits = _catalog_search.query_catalog(query, top_k=max_results)
+    search() doesn't take that parameter itself."""
+    hits = _catalog_search.search(query, top_k=max_results)
     return [
-        SemanticMatch(dataset_id=ds_id, variable=variable, confidence=score)
-        for ds_id, variable, score in hits
+        SemanticMatch(dataset_id=ds_id, variable=variable, confidence=score, use_cases=use_cases)
+        for ds_id, variable, score, use_cases in hits
         if score >= min_confidence
     ]
 
 
 def use_case_labels() -> dict:
-    """Map every curated use-case id to its human-readable label.
+    """Map every curated use-case id to its human-readable label."""
+    return _catalog_search.use_case_labels()
 
-    Always {} here: this plugin doesn't port the curated use-case engine
-    (see SemanticMatch's docstring) — ResourceMatch.use_cases is always
-    empty, so there's never an id to look a label up for. Kept as a
-    function (not deleted) so callers don't need a separate code path.
-    """
-    return {}
+
+def use_case_detail(use_case_id: str) -> dict:
+    """Full curated entry for one use case — label, typical_question,
+    recommended_access/aggregation/style, notes, etc. {} if unknown."""
+    return _catalog_search.use_case_detail(use_case_id)
 
 
 def discover_one(dataset_id: str):
@@ -148,25 +146,17 @@ def discover_all(keyword: Optional[str] = None) -> list:
 
 def _variable_meta(dataset_id: str, variable: str) -> dict:
     """Raw per-variable metadata dict from the ARCO snapshot (unit,
-    colormap, value_min, value_max, ...) — {} if not found. Same
-    "sfc"/"all"/"surface"-preferred subset policy as gb_wrapper.py's
-    version, for the same reason (legend/style display, not WMTS
-    routing — see variable_time_extent for why WMTS routing uses a
-    different, per-variable subset lookup instead)."""
-    arco = _discover._load_arco_snapshot()
-    entry = arco.get(dataset_id.replace("-", "_"))
-    if not entry:
+    colormap, value_min, value_max, ...) — {} if not found. Uses the same
+    per-variable subset resolver as variable_time_extent (not a single
+    guessed-at "sfc"/"all"/"surface" subset for the whole dataset): some
+    datasets (e.g. reanalysis-era5-land) split their variables across
+    several named subsets like "sfc-2m-temperature"/"sfc-soil-temperature"
+    rather than one combined subset, so picking any one fixed subset name
+    would silently miss most variables and return {} for them."""
+    resolved = _discover._arco_subset_for_variable(dataset_id, variable)
+    if not resolved:
         return {}
-    subsets = entry.get("subsets") or {}
-    if not subsets:
-        return {}
-    sub = None
-    for preferred in ("sfc", "all", "surface"):
-        if preferred in subsets:
-            sub = subsets[preferred]
-            break
-    if sub is None:
-        sub = next(iter(subsets.values()))
+    _prefix, sub = resolved
     return (sub.get("variables") or {}).get(variable) or {}
 
 
@@ -519,7 +509,7 @@ def point_time_series(
 
 def zarr_point_time_series(
     *, dataset: str, variable: str, lon: float, lat: float, start, end,
-    chunking: Optional[str] = None,
+    chunking: Optional[str] = None, aggregation: str = "raw",
 ) -> list:
     """Return a list of PointSample for a point over time — one bulk ARCO
     Zarr read ("Full history"). Always prefers geo_chunked when available
@@ -527,10 +517,15 @@ def zarr_point_time_series(
     always the "tiny area, long time" shape that flavour is built for,
     regardless of how long a range is requested — same policy
     geobridge/modules/timeseries.py's zarr_point_time_series documented.
+
+    aggregation bins the raw native-resolution read down to daily/weekly/
+    monthly/annual mean/max/min (see timeseries.aggregate_samples) —
+    "raw" (default) returns every timestep untouched.
     """
     prefer_geo = (chunking != "time_chunked")
     zarr_url, arco_variable = _resolve_zarr(dataset, variable, prefer_geo_chunked=prefer_geo)
-    return _timeseries.zarr_point_time_series(
+    samples = _timeseries.zarr_point_time_series(
         zarr_url=zarr_url, variable=arco_variable, lon=lon, lat=lat,
         start=start, end=end, auth_header=_auth.auth_header(),
     )
+    return _timeseries.aggregate_samples(samples, aggregation)

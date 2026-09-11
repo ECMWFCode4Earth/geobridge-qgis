@@ -72,11 +72,22 @@ def _get_json(url: str, timeout: int = 30) -> dict:
         return json.loads(resp.read())
 
 
-def _download_file(url: str, dest: Path, timeout: int = 300) -> Path:
+def _download_file(url: str, dest_file, timeout: int = 300) -> None:
+    """Stream the response straight into an already-open file object.
+
+    Deliberately doesn't take a path and open/write/close it separately:
+    on Windows, closing the just-created temp file and immediately
+    reopening it for writing left a gap where antivirus real-time
+    scanning could grab the file first, failing the reopen with
+    "[WinError 32] The process cannot access the file because it is
+    being used by another process." Writing through the handle the
+    caller already has open (from NamedTemporaryFile) avoids that gap.
+    """
+    import shutil
+
     req = urllib.request.Request(url, headers=_auth_headers())
     with urllib.request.urlopen(req, timeout=timeout) as resp:
-        dest.write_bytes(resp.read())
-    return dest
+        shutil.copyfileobj(resp, dest_file)
 
 
 # ---------------------------------------------------------------------------
@@ -257,14 +268,17 @@ def cds_to_geotiff(
     if progress_callback:
         progress_callback("Downloading result file...")
 
+    download_error = None
     with tempfile.NamedTemporaryFile(suffix=".download", delete=False) as f:
         raw_path = Path(f.name)
+        try:
+            _download_file(download_url, f)
+        except Exception as exc:
+            download_error = exc
 
-    try:
-        _download_file(download_url, raw_path)
-    except Exception as exc:
+    if download_error is not None:
         raw_path.unlink(missing_ok=True)
-        raise CdsApiError(f"Download failed: {exc}") from exc
+        raise CdsApiError(f"Download failed: {download_error}") from download_error
 
     if progress_callback:
         progress_callback("Converting to GeoTIFF...")

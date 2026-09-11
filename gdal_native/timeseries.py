@@ -57,6 +57,62 @@ class PointSample:
 
 
 # ---------------------------------------------------------------------------
+# Client-side aggregation (Full history only — a point series is already
+# scalars, so binning it costs nothing extra, unlike export_task's raster
+# aggregation which needs GDAL to reduce 2-D arrays per bin)
+# ---------------------------------------------------------------------------
+
+_AGG_PERIOD_KEY = {
+    "daily": lambda dt: dt.date().isoformat(),
+    "weekly": lambda dt: "%d-W%02d" % dt.isocalendar()[:2],
+    "monthly": lambda dt: "%04d-%02d" % (dt.year, dt.month),
+    "annual": lambda dt: "%04d" % dt.year,
+}
+_AGG_STAT = {
+    "mean": lambda values: sum(values) / len(values),
+    "max": max,
+    "min": min,
+}
+
+
+def aggregate_samples(samples: list, aggregation: str = "raw") -> list:
+    """Bin chronological PointSamples into daily/weekly/monthly/annual
+    buckets and reduce each bucket with mean/max/min.
+
+    aggregation is "raw" (returns samples unchanged) or "{period}_{stat}"
+    (e.g. "monthly_mean"), matching export_utils.AGGREGATION_LABELS'
+    naming convention. None-valued samples are dropped before binning; a
+    returned sample's time is its bucket's first real sample's timestamp
+    (not a synthetic period start), so it still plots at a meaningful x
+    position.
+    """
+    if aggregation == "raw" or not samples:
+        return list(samples)
+
+    period, _, stat = aggregation.partition("_")
+    key_fn = _AGG_PERIOD_KEY.get(period)
+    stat_fn = _AGG_STAT.get(stat)
+    if key_fn is None or stat_fn is None:
+        raise ValueError(f"Unknown aggregation: {aggregation!r}")
+
+    buckets: dict = {}
+    order = []
+    for sample in samples:
+        if sample.value is None:
+            continue
+        key = key_fn(sample.time)
+        if key not in buckets:
+            buckets[key] = []
+            order.append(key)
+        buckets[key].append(sample)
+
+    return [
+        PointSample(time=buckets[key][0].time, value=stat_fn([s.value for s in buckets[key]]))
+        for key in order
+    ]
+
+
+# ---------------------------------------------------------------------------
 # WMTS GetFeatureInfo path ("Quick")
 # ---------------------------------------------------------------------------
 

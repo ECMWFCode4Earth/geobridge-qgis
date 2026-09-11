@@ -242,6 +242,16 @@ class BrowseTab(QWidget):
         self.btn_use_layer_extent = QPushButton("Use extent")
         aoi_layout.addWidget(self.btn_use_layer_extent)
 
+        # Picking a layer above does NOT apply its extent by itself — this
+        # spells out the missing second step, since a bare combo+button
+        # pair next to each other otherwise reads as if selecting were
+        # enough on its own.
+        lbl_aoi_layer_hint = QLabel('Select a layer, then click "Use extent" to apply it.')
+        hint_font = lbl_aoi_layer_hint.font()
+        hint_font.setItalic(True)
+        lbl_aoi_layer_hint.setFont(hint_font)
+        aoi_layout.addWidget(lbl_aoi_layer_hint)
+
         self.rad_aoi_draw.toggled.connect(self._on_aoi_mode_changed)
         self.rad_aoi_layer.toggled.connect(self._on_aoi_mode_changed)
         self._on_aoi_mode_changed()
