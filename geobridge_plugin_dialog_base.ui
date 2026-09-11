@@ -200,7 +200,7 @@
        <rect><x>100</x><y>104</y><width>260</width><height>26</height></rect>
       </property>
       <property name="toolTip">
-       <string>Selecting a layer here doesn't apply it by itself — click "Use extent" to actually set it as the area of interest.</string>
+       <string>&lt;p style=&quot;max-width:320px&quot;&gt;Selecting a layer here doesn't apply it by itself — click &quot;Use extent&quot; to actually set it as the area of interest.&lt;/p&gt;</string>
       </property>
      </widget>
      <widget class="QPushButton" name="btn_use_layer_extent">
@@ -209,7 +209,7 @@
       </property>
       <property name="text"><string>Use extent</string></property>
       <property name="toolTip">
-       <string>Click this after picking a layer above to apply its bounding box as the area of interest.</string>
+       <string>&lt;p style=&quot;max-width:320px&quot;&gt;Click this after picking a layer above to apply its bounding box as the area of interest.&lt;/p&gt;</string>
       </property>
      </widget>
 
@@ -435,7 +435,7 @@
      <property name="text"><string>Quick (no auth)</string></property>
      <property name="checked"><bool>true</bool></property>
      <property name="toolTip">
-      <string>One WMTS request per time step. No auth, no extra install. Best for a handful up to a few dozen/hundred steps.</string>
+      <string>&lt;p style=&quot;max-width:320px&quot;&gt;One WMTS request per time step. No auth, no extra install. Best for a handful up to a few dozen/hundred steps.&lt;/p&gt;</string>
      </property>
     </widget>
     <widget class="QRadioButton" name="rad_ts_zarr">
@@ -444,7 +444,7 @@
      </property>
      <property name="text"><string>Full history (Zarr, needs auth)</string></property>
      <property name="toolTip">
-      <string>Bulk read from the ARCO Zarr archive in one go. Requires an authenticated CDS API key. Best for long/dense ranges (years of data).</string>
+      <string>&lt;p style=&quot;max-width:320px&quot;&gt;Bulk read from the ARCO Zarr archive in one go. Requires an authenticated CDS API key. Best for long/dense ranges (years of data).&lt;/p&gt;</string>
      </property>
     </widget>
 
@@ -505,7 +505,7 @@
 
     <widget class="QPushButton" name="btn_ts_refresh">
      <property name="geometry">
-      <rect><x>250</x><y>158</y><width>110</width><height>28</height></rect>
+      <rect><x>270</x><y>158</y><width>110</width><height>28</height></rect>
      </property>
      <property name="text"><string>Refresh</string></property>
      <property name="enabled"><bool>false</bool></property>

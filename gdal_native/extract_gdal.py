@@ -30,7 +30,7 @@ from __future__ import annotations
 import re
 import tempfile
 import zipfile
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -319,6 +319,45 @@ class TimeGrid:
         first_two = time_array[0:min(2, length)].ReadAsArray()
         start_value = float(first_two[0])
         step = float(first_two[1] - first_two[0]) if length > 1 else 0.0
+
+        # _parse_time_unit falls back to a hardcoded "days since
+        # 1970-01-01" when it can't find/parse a units attribute on
+        # time_array - confirmed actually happening against a real store
+        # (ERA5's geoChunked time coordinate), where the raw values
+        # turned out to be in seconds, not days. That mismatch doesn't
+        # raise or produce an obviously-wrong result: index_for() still
+        # returns *some* in-bounds index, it's just the wrong one, and
+        # because the mismatch dwarfs any real requested date range, the
+        # computed start/end index for two dates weeks apart round to the
+        # same value - a point-series fetch that silently comes back with
+        # exactly 1 sample regardless of the requested range, no error at
+        # all. Sanity-check against the actual first value: if the
+        # resulting date isn't plausible for climate data (or wildly
+        # outside datetime's own year 1-9999 range, which the wrong unit
+        # can easily overflow), unit_seconds is wrong - try the other
+        # common CF units and keep whichever puts that first timestamp
+        # closest to now.
+        def _date_at(candidate_unit_seconds):
+            try:
+                return epoch + timedelta(seconds=start_value * candidate_unit_seconds)
+            except (OverflowError, OSError):
+                return None
+
+        first_date = _date_at(unit_seconds)
+        if first_date is None or not (datetime(1850, 1, 1) <= first_date <= datetime(2100, 1, 1)):
+            # Naive local time, not UTC - fine here, the 4 unit_seconds
+            # candidates are years/centuries apart, so a same-day offset
+            # never changes which one is closest.
+            now = datetime.now()
+
+            def _distance(candidate_unit_seconds):
+                candidate_date = _date_at(candidate_unit_seconds)
+                if candidate_date is None:
+                    return float("inf")
+                return abs((candidate_date - now).total_seconds())
+
+            unit_seconds = min((1, 60, 3600, 86400), key=_distance)
+
         return cls(epoch, unit_seconds, start_value, step, length)
 
     def index_for(self, dt_like) -> int:

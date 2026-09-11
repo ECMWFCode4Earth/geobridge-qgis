@@ -152,12 +152,52 @@ def _variable_meta(dataset_id: str, variable: str) -> dict:
     datasets (e.g. reanalysis-era5-land) split their variables across
     several named subsets like "sfc-2m-temperature"/"sfc-soil-temperature"
     rather than one combined subset, so picking any one fixed subset name
-    would silently miss most variables and return {} for them."""
+    would silently miss most variables and return {} for them.
+
+    value_min/value_max/colormap always come from the routed subset (they
+    describe that specific subset's own calibration, e.g. a particular
+    sensor's typical range — mixing them in from elsewhere would show a
+    legend range that doesn't match what's actually on screen). unit is
+    the one exception: some datasets (e.g. satellite_cloud_properties)
+    catalogue the *same* short variable name under several sensor-specific
+    subsets, and only some of those subsets happen to record a unit for
+    it (e.g. "iwp_day" has unit "g/m2" in most of its subsets but "" in
+    two others) — a missing unit here falls back to whatever unit a
+    sibling subset records for the same variable name, since the physical
+    unit doesn't vary by sensor even though the calibrated range does."""
     resolved = _discover._arco_subset_for_variable(dataset_id, variable)
     if not resolved:
         return {}
     _prefix, sub = resolved
-    return (sub.get("variables") or {}).get(variable) or {}
+    meta = dict((sub.get("variables") or {}).get(variable) or {})
+    if not meta.get("unit"):
+        fallback_unit = _fallback_unit(dataset_id, variable)
+        if fallback_unit:
+            meta["unit"] = fallback_unit
+    # CF convention's "1" means dimensionless (e.g. a 0-1 fraction like
+    # cloud cover) - technically a unit, but showing the literal digit
+    # "1" next to a value ("0.52 1") reads as a typo, not a unit. Blank it
+    # out here so every caller (legend, Time Series plot) gets the same
+    # "no unit to show" behavior a genuinely missing unit already gets,
+    # and flag it separately so a caller can still say so once, near the
+    # variable name, instead of on every value.
+    if meta.get("unit") == "1":
+        meta["unit"] = ""
+        meta["dimensionless"] = True
+    return meta
+
+
+def _fallback_unit(dataset_id: str, variable: str) -> str:
+    """First non-empty unit recorded for `variable` under any subset of
+    `dataset_id` — see _variable_meta's docstring for why this is unit-
+    only, not a general "pick a better subset" fallback."""
+    arco = _discover._load_arco_snapshot()
+    entry = arco.get(dataset_id.replace("-", "_")) or {}
+    for sub in (entry.get("subsets") or {}).values():
+        unit = ((sub.get("variables") or {}).get(variable) or {}).get("unit")
+        if unit:
+            return unit
+    return ""
 
 
 def variable_unit(dataset_id: str, variable: str) -> str:
@@ -183,8 +223,10 @@ def variable_time_extent(dataset_id: str, variable: str) -> Optional[Tuple[str, 
 
 def variable_style(dataset_id: str, variable: str) -> dict:
     """Legend-ready style info: {"unit", "colormap", "value_min",
-    "value_max"} — same source wmts_layer(style="default") reads to
-    colour the WMTS tiles this plugin displays. {} if unknown."""
+    "value_max", "dimensionless"} — same source wmts_layer(style="default")
+    reads to colour the WMTS tiles this plugin displays. {} if unknown.
+    "dimensionless" is True when the catalogue's own unit is CF's "1"
+    (blanked out of "unit" itself — see _variable_meta)."""
     meta = _variable_meta(dataset_id, variable)
     if not meta or meta.get("value_min") is None or meta.get("value_max") is None:
         return {}
@@ -193,6 +235,7 @@ def variable_style(dataset_id: str, variable: str) -> dict:
         "colormap": meta.get("colormap", "") or "viridis",
         "value_min": meta.get("value_min"),
         "value_max": meta.get("value_max"),
+        "dimensionless": bool(meta.get("dimensionless")),
     }
 
 

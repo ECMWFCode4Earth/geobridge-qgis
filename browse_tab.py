@@ -222,7 +222,7 @@ class BrowseTab(QWidget):
         # icon (geobridge_plugin_dialog.py's lbl_aoi_layer_info_icon).
         self.lbl_aoi_layer_info_icon = QLabel()
         self.lbl_aoi_layer_info_icon.setPixmap(icons.info_icon(16))
-        self.lbl_aoi_layer_info_icon.setToolTip(
+        self.lbl_aoi_layer_info_icon.setToolTip(icons.wrap_tooltip(
             "Using a layer sets the area of interest to that layer's "
             "rectangular bounding box — not the actual outline of its "
             "polygon(s). An irregular region (e.g. a watershed or admin "
@@ -232,7 +232,7 @@ class BrowseTab(QWidget):
             "To keep only the pixels inside the polygon, clip the "
             "exported GeoTIFF afterwards in QGIS (Raster → Extraction → "
             "Clip Raster by Mask Layer), using this layer as the mask."
-        )
+        ))
         aoi_layer_caption_row.addWidget(self.lbl_aoi_layer_info_icon)
         aoi_layer_caption_row.addStretch(1)
         aoi_layout.addLayout(aoi_layer_caption_row)

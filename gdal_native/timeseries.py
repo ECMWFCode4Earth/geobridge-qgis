@@ -337,6 +337,25 @@ def zarr_point_time_series(
         lon_idx = _nearest_index(lon_array, lon)
         t_start, t_end, time_grid = _time_bounds_indices(time_array, start, end)
 
+        # "Done: 1 point(s)" reports with no visible error have happened
+        # more than once and couldn't be reproduced offline (this path
+        # needs a real, authenticated Zarr read) - log the numbers behind
+        # t_start/t_end so a real occurrence can actually be diagnosed
+        # from QGIS's Log Messages panel (tag "GeoBridge") instead of
+        # guessed at blind. Cheap enough to leave in permanently.
+        try:
+            from qgis.core import Qgis, QgsMessageLog
+            QgsMessageLog.logMessage(
+                f"zarr_point_time_series: requested {start!r}..{end!r} -> "
+                f"t_start={t_start} t_end={t_end} "
+                f"(grid: start_value={time_grid.start_value} step={time_grid.step} "
+                f"length={time_grid.length}, epoch={time_grid.epoch} "
+                f"unit_seconds={time_grid.unit_seconds})",
+                "GeoBridge", Qgis.MessageLevel.Info,
+            )
+        except Exception:
+            pass
+
         index_slice = []
         for i, name in enumerate(dim_names):
             if i == lat_i:

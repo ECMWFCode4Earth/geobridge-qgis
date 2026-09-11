@@ -238,6 +238,7 @@ def _eye_icon(crossed: bool) -> QIcon:
 
 
 _info_icon = icons.info_icon
+_wrap_tooltip = icons.wrap_tooltip
 
 
 def _rect_to_wgs84_bbox(rect, source_crs):
@@ -380,7 +381,7 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         self.lbl_step_info_icon = QtWidgets.QLabel(self.groupBox_time_range)
         self.lbl_step_info_icon.setGeometry(250, 116, 18, 18)
         self.lbl_step_info_icon.setPixmap(_info_icon(18))
-        self.lbl_step_info_icon.setToolTip(
+        self.lbl_step_info_icon.setToolTip(_wrap_tooltip(
             "Step picks which individual timestamps to render as separate "
             "layers — it is not an aggregation. Each layer shows the value "
             "at that exact moment, not a value processed or averaged over "
@@ -388,7 +389,7 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
             "the 6 days in between are skipped, not averaged in.\n\n"
             "For an actual statistical reduction over a period (mean/max/"
             "min), use Aggregation in the Export to GeoTIFF section instead."
-        )
+        ))
 
         # Info icon in the group box's own header, top-right corner (the
         # title text "Area of interest" only occupies the left side of that
@@ -406,23 +407,23 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         self.lbl_export_info_icon = QtWidgets.QLabel(self.groupBox_export)
         self.lbl_export_info_icon.setGeometry(516, 3, 16, 16)
         self.lbl_export_info_icon.setPixmap(_info_icon(16))
-        self.lbl_export_info_icon.setToolTip(
+        self.lbl_export_info_icon.setToolTip(_wrap_tooltip(
             "Only works for ARCO Zarr-backed datasets, not every dataset in "
             "the catalogue — CDS-API-only datasets (WMTS preview but no Zarr "
             "archive) can't be exported this way. The button below is "
             "disabled with an explanation when the currently selected "
             "dataset doesn't support it."
-        )
+        ))
 
         self.lbl_aoi_scope_info_icon = QtWidgets.QLabel(self.groupBox_aoi)
         self.lbl_aoi_scope_info_icon.setGeometry(516, 3, 16, 16)
         self.lbl_aoi_scope_info_icon.setPixmap(_info_icon(16))
-        self.lbl_aoi_scope_info_icon.setToolTip(
+        self.lbl_aoi_scope_info_icon.setToolTip(_wrap_tooltip(
             "This area only scopes the Export to GeoTIFF download below.\n\n"
             "It has no effect on Build layers / the WMTS preview above — "
             "that always fetches the entire globe; only what the QGIS map "
             "canvas happens to be showing looks cropped."
-        )
+        ))
 
         # Info icon next to "Use extent" clarifying that a polygon layer's
         # *rectangular bounding box* is what gets used, not the polygon's
@@ -433,7 +434,7 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         self.lbl_aoi_layer_info_icon = QtWidgets.QLabel(self.groupBox_aoi)
         self.lbl_aoi_layer_info_icon.setGeometry(521, 105, 16, 16)
         self.lbl_aoi_layer_info_icon.setPixmap(_info_icon(16))
-        self.lbl_aoi_layer_info_icon.setToolTip(
+        self.lbl_aoi_layer_info_icon.setToolTip(_wrap_tooltip(
             "Using a layer sets the area of interest to that layer's "
             "rectangular bounding box — not the actual outline of its "
             "polygon(s). An irregular region (e.g. a watershed or admin "
@@ -443,7 +444,7 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
             "To keep only the pixels inside the polygon, clip the "
             "exported GeoTIFF afterwards in QGIS (Raster → Extraction → "
             "Clip Raster by Mask Layer), using this layer as the mask."
-        )
+        ))
 
         # Custom tick marks below slider_time — see _SliderTickMarks for why
         # (QSlider's native ticks aren't stylable). slider_time's own height
@@ -583,10 +584,10 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         self.lbl_ts_info_icon = QtWidgets.QLabel(self.tab_timeseries)
         self.lbl_ts_info_icon.setGeometry(484, 10 + _TS_NOTE_SHIFT, 16, 16)
         self.lbl_ts_info_icon.setPixmap(_info_icon())
-        self.lbl_ts_info_icon.setToolTip(
+        self.lbl_ts_info_icon.setToolTip(_wrap_tooltip(
             "This tab has no dataset picker of its own — it always uses "
             "whatever dataset/variable is currently selected on the Search tab."
-        )
+        ))
 
         _TS_LAYOUT_SHIFT = 44 + _TS_NOTE_SHIFT
         self.lbl_ts_hint.setGeometry(10, 52 + _TS_NOTE_SHIFT, 520, 34)
@@ -609,12 +610,12 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
             self.rad_ts_zarr.x() + self.rad_ts_zarr.width() + 4, self.rad_ts_zarr.y() + 5, 16, 16
         )
         self.lbl_ts_zarr_info_icon.setPixmap(_info_icon(16))
-        self.lbl_ts_zarr_info_icon.setToolTip(
+        self.lbl_ts_zarr_info_icon.setToolTip(_wrap_tooltip(
             "Only works for ARCO Zarr-backed datasets, not every dataset in "
             "the catalogue — CDS-API-only datasets can't use Full history. "
             "This radio is disabled when the currently selected dataset "
             "doesn't support it."
-        )
+        ))
 
         # Quick has no aggregation — one WMTS GetFeatureInfo value per Step
         # interval, not a reduction over several — so it's easy to misread
@@ -625,11 +626,11 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
             self.cmb_ts_step.x() + self.cmb_ts_step.width() + 6, self.cmb_ts_step.y() + 5, 16, 16
         )
         self.lbl_ts_step_info_icon.setPixmap(_info_icon())
-        self.lbl_ts_step_info_icon.setToolTip(
+        self.lbl_ts_step_info_icon.setToolTip(_wrap_tooltip(
             "Quick reads one raw value every Step interval — it is not "
             "aggregated/averaged over that interval. For a true daily/"
             "weekly/monthly/annual mean, max or min, switch to Full history."
-        )
+        ))
 
         # Full history reads the whole native-resolution series in one go,
         # so — unlike Quick — it can cheaply reduce it to a daily/weekly/
@@ -680,7 +681,9 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
             # top of that is just breathing room so the play button/slider
             # row isn't sitting flush against the window's bottom edge.
             self.tab_search: QSize(1140, 760 + 34 + 40),
-            self.tab_timeseries: QSize(720, 700),
+            # Matches the size the user had it resized to by hand (measured
+            # live via the window's client-area rect: 791x928).
+            self.tab_timeseries: QSize(791, 928),
             self.browse_tab: QSize(1040, 780),
         }
         self.tabWidget.currentChanged.connect(self._on_tab_changed)
@@ -876,7 +879,7 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
                     )
                     if recipe:
                         tooltip_lines.append(recipe)
-                    use_case_item.setToolTip("\n".join(tooltip_lines))
+                    use_case_item.setToolTip(_wrap_tooltip("\n\n".join(tooltip_lines)))
             self.list_results.setItem(row, 1, use_case_item)
             self.list_results.setItem(row, 2, QtWidgets.QTableWidgetItem(m.dataset_id))
             # Hovering the short variable code shows its readable name.
@@ -931,6 +934,16 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         self.rad_ts_zarr.setEnabled(has_zarr)
         if not has_zarr and self.rad_ts_zarr.isChecked():
             self.rad_ts_quick.setChecked(True)
+
+        # Reset Full history's Aggregation back to Raw on every new Search
+        # selection: it's easy to leave it on e.g. "Monthly mean" after
+        # trying it on one dataset, then be confused when a completely
+        # different dataset's fetch comes back as "Done: 1 point(s)" for
+        # no apparent reason - a 30-day default range collapses to a
+        # single bucket under Monthly/Annual. Aggregation should be a
+        # deliberate per-fetch choice, not something that silently
+        # survives a dataset switch.
+        self.cmb_ts_agg.setCurrentIndex(0)
 
         self.groupBox_export.setVisible(bool(descriptor))
         self.btn_export_geotiff.setEnabled(has_zarr)
@@ -1173,6 +1186,8 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         label = match.variable
         if variable_labels.has_label(match.variable):
             label += f" ({variable_labels.friendly_name(match.variable)})"
+        if style.get("dimensionless"):
+            label += " (dimensionless)"
         self.legend_widget.set_style(style, variable_label=label)
 
     def _update_time_extent(self, match, has_wmts):
@@ -2126,10 +2141,32 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
 
     def showEvent(self, event):
         super(GeoBridgePluginDialog, self).showEvent(event)
+        self._position_near_top_left()
         self._refresh_dependency_banner()
         self._refresh_aoi_layer_combo()
         self.browse_tab.refresh_datasets()
         self._apply_tab_size(self.tabWidget.currentIndex())
+
+    def _position_near_top_left(self):
+        """Anchor the window near the screen's top-left every time the
+        plugin is (re)opened, instead of wherever Qt/the window manager
+        last left it. The dialog starts small (API Key tab) but grows a
+        lot switching to Search/Browse (up to ~1140x834) — _apply_tab_size
+        clamps the position so a resize never pushes it off-screen, but
+        clamping only kicks in *after* the window has already grown from
+        wherever it happened to open; starting near the top-left instead
+        gives it room to grow toward the bottom-right on the first tab
+        switch too, so nothing needs to be clamped/shifted into view.
+        """
+        try:
+            avail = self.screen().availableGeometry()
+        except Exception:
+            app_screen = QtWidgets.QApplication.primaryScreen()
+            avail = app_screen.availableGeometry() if app_screen is not None else None
+        if avail is None:
+            return
+        margin = 100
+        self.move(avail.left() + margin, avail.top() + margin)
 
     def _reset_aoi_tool_if_active(self):
         """If the AOI rectangle tool is still the active canvas tool when
