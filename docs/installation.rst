@@ -5,18 +5,24 @@ Requirements
 ------------
 
 * QGIS 3.28 or newer.
+* **GDAL 3.9 or newer**, for full functionality (bundled with roughly
+  **QGIS 3.38+** on Windows — on Linux this varies by distro/package
+  source rather than tracking the QGIS version number, so check directly:
+  in QGIS's own **Plugins → Python Console**, run
+  ``from osgeo import gdal; print(gdal.__version__)``).
 * A free Copernicus Climate Data Store (CDS) account, for authenticated
   features — register at `cds.climate.copernicus.eu
   <https://cds.climate.copernicus.eu>`_.
 
 .. note::
-   A handful of datasets are stored in the newer **Zarr V3** format, which
-   needs GDAL 3.9 or later (bundled with roughly **QGIS 3.38+**) to read.
-   On an older QGIS/GDAL, those specific datasets fail with an error like
-   *"Variable '<name>' not found in Zarr store"* even though nothing is
-   actually wrong with the dataset or your request — everything else in
-   the plugin is unaffected. If you hit that error, updating QGIS is the
-   fix, not anything in this plugin.
+   The GDAL version only matters for a handful of datasets stored in the
+   newer **Zarr V3** format. On an older GDAL, those specific datasets
+   fail with an error like *"Variable '<name>' not found in Zarr store"*
+   even though nothing is actually wrong with the dataset or your
+   request — everything else in the plugin (search, WMTS preview,
+   Browse by Variable, CDS downloads) works regardless of GDAL version.
+   If you hit that error, updating QGIS/GDAL is the fix, not anything in
+   this plugin.
 
 Installing the plugin
 ----------------------

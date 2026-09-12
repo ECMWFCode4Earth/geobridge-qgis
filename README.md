@@ -19,18 +19,17 @@
 > independent community contribution — **not an official ECMWF product**, and not maintained or
 > supported by ECMWF.
 
-A QGIS 3 plugin that wraps the [geobridge](https://github.com/ECMWFCode4Earth/GeoBridge)
-Python library: enter a Copernicus CDS API key once, semantically search for a use case
-("urban heat island", "PM2.5 exposure"), and preview the recommended dataset as a
-time-stepped WMTS layer directly on the map — with a play/pause slider to scrub through time.
+A QGIS 3 plugin that discovers, semantically searches, and previews Copernicus climate data
+(ERA5, CAMS, CEMS) as WMTS layers directly in QGIS, and exports selections to GeoTIFF — built
+entirely on QGIS's own bundled GDAL, with no extra Python packages to install.
 
-This plugin is a thin wrapper. All discovery, semantic search, and WMTS URL logic lives in
-`geobridge`; nothing is reimplemented here.
-
-> **Note:** QGIS 3.28+ covers almost everything, but a handful of datasets use the newer Zarr V3
-> format, which needs GDAL 3.9+ (bundled with roughly **QGIS 3.38+**) to read. On an older
-> install those specific datasets fail with a "Variable not found in Zarr store" error — see
-> [Installation](https://geobridge-qgis.readthedocs.io/en/latest/installation.html) for details.
+**Requirements:** QGIS ≥ 3.28, with **GDAL ≥ 3.9** for full functionality. QGIS 3.28+ alone
+covers almost everything, but a handful of datasets use the newer Zarr V3 format, which needs
+GDAL 3.9+ (bundled with roughly **QGIS 3.38+** on Windows — on Linux this varies by
+distro/package source, so check directly: `python3 -c "from osgeo import gdal;
+print(gdal.__version__)"`, or via QGIS's own Python Console) to read. On an older GDAL those
+specific datasets fail with a "Variable not found in Zarr store" error — see
+[Installation](https://geobridge-qgis.readthedocs.io/en/latest/installation.html) for details.
 
 <p align="center">
   <img src="docs/_static/screenshots/search_tab.png" width="700" alt="The Search tab: semantic search results, area of interest, time range, and Export to GeoTIFF with a color legend" />
