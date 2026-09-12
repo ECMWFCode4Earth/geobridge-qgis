@@ -8,7 +8,7 @@
 
 <p align="center">
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/ECMWFCode4Earth/geobridge-qgis" /></a>
-  <img alt="QGIS" src="https://img.shields.io/badge/QGIS-%E2%89%A5%203.28-589632" />
+  <img alt="QGIS" src="https://img.shields.io/badge/QGIS-%E2%89%A5%203.38-589632" />
   <a href="https://geobridge-qgis.readthedocs.io/en/latest/?badge=latest"><img alt="Docs" src="https://readthedocs.org/projects/geobridge-qgis/badge/?version=latest" /></a>
   <img alt="Last commit" src="https://img.shields.io/github/last-commit/ECMWFCode4Earth/geobridge-qgis" />
   <img alt="Open issues" src="https://img.shields.io/github/issues/ECMWFCode4Earth/geobridge-qgis" />
