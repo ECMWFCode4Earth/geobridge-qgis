@@ -11,11 +11,11 @@ in QGIS, and exports selections to GeoTIFF — built entirely on QGIS's own
 bundled GDAL, with no extra Python packages to install.
 
 .. note::
-   **Disclaimer:** GeoBridge was built for `ECMWF's Code for Earth
-   <https://codeforearth.ecmwf.int/>`_ program by participants Ilias
-   Machairas and Konstantinos Fokeas. It is an independent community
-   contribution — **not an official ECMWF product**, and it is not
-   maintained or supported by ECMWF.
+   **Disclaimer:** GeoBridge was built as part of an ECMWF-affiliated
+   open-source program by participants Ilias Machairas and Konstantinos
+   Fokeas. It is an independent community contribution — **not an
+   official ECMWF product**, and it is not maintained or supported by
+   ECMWF.
 
 Plugin source: https://github.com/ECMWFCode4Earth/geobridge-qgis
 
