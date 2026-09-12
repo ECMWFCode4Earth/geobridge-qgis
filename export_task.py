@@ -23,6 +23,7 @@ Usage
 from __future__ import annotations
 
 import os
+import traceback
 
 from qgis.core import Qgis, QgsMessageLog, QgsProject, QgsRasterLayer, QgsTask
 
@@ -58,6 +59,7 @@ class ExportTask(QgsTask):
         self.add_to_map = add_to_map
         self.result_path = None
         self.exception = None
+        self.traceback = None
 
     def run(self) -> bool:
         try:
@@ -67,6 +69,14 @@ class ExportTask(QgsTask):
                 self.result_path = gb_wrapper.export_cds_to_geotiff(**self.params)
         except Exception as exc:  # noqa: BLE001 — surfaced via self.exception
             self.exception = exc
+            # Captured here, on the worker thread, while the traceback is
+            # still live — by the time finished() runs on the main thread
+            # the on-screen lbl_status only has room for str(exc) (and
+            # even that gets wrapped/clipped in a narrow column), so the
+            # full stack is what actually lets you tell *where* a failure
+            # like the netCDF/HDF5 driver mismatch happened, not just that
+            # it did — see it in View → Panels → Log Messages → GeoBridge.
+            self.traceback = traceback.format_exc()
             return False
         return True
 
@@ -84,5 +94,7 @@ class ExportTask(QgsTask):
                     )
         else:
             QgsMessageLog.logMessage(
-                f"GeoBridge export failed: {self.exception}", LOG_TAG, Qgis.MessageLevel.Critical
+                f"GeoBridge export failed: {self.exception}\n{self.traceback or ''}",
+                LOG_TAG,
+                Qgis.MessageLevel.Critical,
             )
