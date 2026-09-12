@@ -216,7 +216,8 @@ def zarr_point_time_series(
                 f"unit_seconds={time_grid.unit_seconds})",
                 "GeoBridge", Qgis.MessageLevel.Info,
             )
-        except Exception:
+        except Exception:  # nosec B110
+            # Diagnostic logging must never break the actual read.
             pass
 
         index_slice = []
