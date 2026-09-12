@@ -66,7 +66,7 @@ class ExtractError(Exception):
 _SHARING_VIOLATION_MARKERS = ("being used by another process", "winerror 32", "sharing violation")
 
 
-def _gdal_open_with_retry(path: str, attempts: int = 5, delay: float = 0.2):
+def _gdal_open_with_retry(path: str, attempts: int = 5, delay: float = 0.2, allowed_drivers=None):
     """gdal.Open(path), retrying briefly on a Windows sharing-violation.
 
     This is the first GDAL-level open of a file cds_to_geotiff() just
@@ -79,10 +79,17 @@ def _gdal_open_with_retry(path: str, attempts: int = 5, delay: float = 0.2):
     exceptions here are a RuntimeError with the OS's own message text
     embedded (no `.winerror` attribute to check, unlike a plain Python
     OSError), so this matches on that text instead.
+
+    `allowed_drivers` restricts which driver GDAL is allowed to pick,
+    rather than letting it auto-detect by content — see
+    _open_netcdf_variable's docstring for why this matters for NetCDF4
+    files specifically (their container format is byte-for-byte HDF5).
     """
     last_exc = None
     for _ in range(attempts):
         try:
+            if allowed_drivers:
+                return gdal.OpenEx(path, allowed_drivers=allowed_drivers)
             return gdal.Open(path)
         except RuntimeError as exc:
             if not any(marker in str(exc).lower() for marker in _SHARING_VIOLATION_MARKERS):
@@ -162,8 +169,20 @@ def _band_matches(want_norm: str, band: "gdal.Band", subdataset_desc: str = "") 
 
 def _open_netcdf_variable(path: Path, variable: str) -> "gdal.Dataset":
     """Open the NetCDF subdataset matching *variable* (or the only one, or
-    all bands of the first grid subdataset if no match/variable given)."""
-    root = _gdal_open_with_retry(str(path))
+    all bands of the first grid subdataset if no match/variable given).
+
+    Forces GDAL's netCDF driver rather than letting it auto-detect: a
+    NetCDF4 file's container format is literally HDF5 (same magic
+    bytes our own sniff_format() checks), so an unrestricted gdal.Open()
+    can end up handed to GDAL's plain HDF5 driver instead — which has
+    no idea about CF-convention lat/lon coordinates, so every subdataset
+    it opens comes back with no affine geotransform and no GCPs at all
+    (confirmed happening in practice for some CDS "derived" datasets,
+    e.g. derived-era5-land-daily-statistics: "HDF5:...://u10" instead of
+    "NETCDF:...":u10", failing every warp/export downstream with "There
+    is no affine transformation and no GCPs").
+    """
+    root = _gdal_open_with_retry(str(path), allowed_drivers=["netCDF"])
     if root is None:
         raise ExtractError(f"GDAL could not open {path} as NetCDF.")
 
