@@ -260,6 +260,7 @@ class BrowseTab(QWidget):
         bold_font = lbl_aoi_method.font()
         bold_font.setBold(True)
         lbl_aoi_method.setFont(bold_font)
+        lbl_aoi_method.setWordWrap(True)
         aoi_layout.addWidget(lbl_aoi_method)
 
         self.lbl_aoi_bbox = QLabel("Whole globe (no area set).")
