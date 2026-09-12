@@ -719,7 +719,17 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
             # Matches the size the user had it resized to by hand (measured
             # live via the window's client-area rect: 791x928).
             self.tab_timeseries: QSize(791, 928),
-            self.browse_tab: QSize(1040, 780),
+            # +40 over the original 780: breathing room in the right
+            # column's fixed height. lbl_aoi_bbox (Area of interest) sits
+            # in a genuinely layout-managed QVBoxLayout here (unlike the
+            # Search tab's absolute-positioned equivalent), so it does
+            # resize itself correctly when its text needs a second line —
+            # but that column has nowhere to grow *into* once this whole
+            # window is already at its fixed size, so the second line
+            # still got clipped in practice (confirmed in a Linux
+            # screenshot, right column narrower than the Search tab's at
+            # only 360px wide, so wrapping to 2 lines happens more often).
+            self.browse_tab: QSize(1040, 820),
         }
         self.tabWidget.currentChanged.connect(self._on_tab_changed)
 
