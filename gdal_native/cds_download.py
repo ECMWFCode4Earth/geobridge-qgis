@@ -198,8 +198,31 @@ _MAGIC = {
 
 
 def sniff_format(path: Path) -> str:
-    with open(path, "rb") as fh:
-        head = fh.read(8)
+    # This is the very first read of a file this process just finished
+    # writing and closed (in cds_to_geotiff, right before calling here) -
+    # on Windows, that's exactly the window where Defender's real-time
+    # scan can grab a freshly-written file for a moment, so a plain
+    # open() here intermittently failed with "[WinError 32] The process
+    # cannot access the file because it is being used by another
+    # process" even after the earlier download-side race (closing then
+    # reopening our *own* handle) was already fixed - this is a second,
+    # different race, with an external process rather than ourselves.
+    # Defender's lock is brief, so a few short retries clear it.
+    attempts, delay = 5, 0.2
+    last_exc = None
+    for _ in range(attempts):
+        try:
+            with open(path, "rb") as fh:
+                head = fh.read(8)
+            break
+        except (PermissionError, OSError) as exc:
+            if getattr(exc, "winerror", None) != 32:
+                raise
+            last_exc = exc
+            time.sleep(delay)
+    else:
+        raise last_exc
+
     for magic, fmt in _MAGIC.items():
         if head.startswith(magic):
             return fmt

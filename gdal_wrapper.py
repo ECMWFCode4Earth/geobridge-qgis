@@ -534,22 +534,6 @@ def export_cds_to_geotiff(
 # Point time series
 # ---------------------------------------------------------------------------
 
-def point_time_series(
-    *,
-    dataset: str, variable: str, lon: float, lat: float, start, end,
-    step_days: float = 1, zoom: int = 8, style: str = "default",
-    progress_callback: Optional[Callable[[int, int], None]] = None,
-    is_canceled: Optional[Callable[[], bool]] = None,
-) -> list:
-    """Return a list of PointSample for a point over time — WMTS
-    GetFeatureInfo, one request per timestep ("Quick")."""
-    return _timeseries.point_time_series(
-        dataset=dataset, variable=variable, lon=lon, lat=lat,
-        start=start, end=end, step_days=step_days, zoom=zoom, style=style,
-        progress_callback=progress_callback, is_canceled=is_canceled,
-    )
-
-
 def zarr_point_time_series(
     *, dataset: str, variable: str, lon: float, lat: float, start, end,
     chunking: Optional[str] = None, aggregation: str = "raw",

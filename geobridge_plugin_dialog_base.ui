@@ -422,32 +422,6 @@
      <property name="wordWrap"><bool>true</bool></property>
     </widget>
 
-    <widget class="QLabel" name="lbl_ts_method">
-     <property name="geometry">
-      <rect><x>10</x><y>52</y><width>60</width><height>24</height></rect>
-     </property>
-     <property name="text"><string>Method:</string></property>
-    </widget>
-    <widget class="QRadioButton" name="rad_ts_quick">
-     <property name="geometry">
-      <rect><x>70</x><y>50</y><width>150</width><height>26</height></rect>
-     </property>
-     <property name="text"><string>Quick (no auth)</string></property>
-     <property name="checked"><bool>true</bool></property>
-     <property name="toolTip">
-      <string>&lt;p style=&quot;max-width:320px&quot;&gt;One WMTS request per time step. No auth, no extra install. Best for a handful up to a few dozen/hundred steps.&lt;/p&gt;</string>
-     </property>
-    </widget>
-    <widget class="QRadioButton" name="rad_ts_zarr">
-     <property name="geometry">
-      <rect><x>230</x><y>50</y><width>260</width><height>26</height></rect>
-     </property>
-     <property name="text"><string>Full history (Zarr, needs auth)</string></property>
-     <property name="toolTip">
-      <string>&lt;p style=&quot;max-width:320px&quot;&gt;Bulk read from the ARCO Zarr archive in one go. Requires an authenticated CDS API key. Best for long/dense ranges (years of data).&lt;/p&gt;</string>
-     </property>
-    </widget>
-
     <widget class="QPushButton" name="btn_pick_point">
      <property name="geometry">
       <rect><x>10</x><y>84</y><width>200</width><height>30</height></rect>
@@ -489,18 +463,6 @@
      </property>
      <property name="displayFormat"><string>yyyy-MM-dd</string></property>
      <property name="calendarPopup"><bool>true</bool></property>
-    </widget>
-
-    <widget class="QLabel" name="lbl_ts_step">
-     <property name="geometry">
-      <rect><x>10</x><y>160</y><width>60</width><height>24</height></rect>
-     </property>
-     <property name="text"><string>Step:</string></property>
-    </widget>
-    <widget class="QComboBox" name="cmb_ts_step">
-     <property name="geometry">
-      <rect><x>80</x><y>158</y><width>150</width><height>26</height></rect>
-     </property>
     </widget>
 
     <widget class="QPushButton" name="btn_ts_refresh">

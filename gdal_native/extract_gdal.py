@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import re
 import tempfile
+import time
 import zipfile
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -61,6 +62,77 @@ class ExtractError(Exception):
     """Raised when a downloaded/remote file can't be converted to GeoTIFF."""
 
 
+_SHARING_VIOLATION_MARKERS = ("being used by another process", "winerror 32", "sharing violation")
+
+
+def _gdal_open_with_retry(path: str, attempts: int = 5, delay: float = 0.2):
+    """gdal.Open(path), retrying briefly on a Windows sharing-violation.
+
+    This is the first GDAL-level open of a file cds_to_geotiff() just
+    finished downloading and closed moments ago - sniff_format()'s own
+    plain-Python open() already retries the *very first* read for the
+    same reason (Defender's real-time scan can briefly lock a freshly-
+    written file), but that clearing one lock doesn't guarantee GDAL's
+    own open() right after won't hit a fresh one - confirmed happening
+    in practice even with sniff_format's retry already in place. GDAL
+    exceptions here are a RuntimeError with the OS's own message text
+    embedded (no `.winerror` attribute to check, unlike a plain Python
+    OSError), so this matches on that text instead.
+    """
+    last_exc = None
+    for _ in range(attempts):
+        try:
+            return gdal.Open(path)
+        except RuntimeError as exc:
+            if not any(marker in str(exc).lower() for marker in _SHARING_VIOLATION_MARKERS):
+                raise
+            last_exc = exc
+            time.sleep(delay)
+    raise last_exc
+
+
+def variable_not_found_message(variable: str, available: list, detail: str = "") -> str:
+    """Shared "variable not found in Zarr store" text for extract_gdal.py
+    and timeseries.py. An *empty* `available` list is the tell: GDAL
+    could open the store's connection but found nothing to list at all,
+    which in practice has meant an old bundled GDAL that doesn't
+    understand this store's Zarr V3 metadata (zarr.json) - it opens the
+    connection fine, just can't enumerate anything in it, and any
+    specific variable then looks like it "doesn't exist" - confirmed
+    happening for real: QGIS 3.34 (GDAL ~3.7/3.8, predates GDAL 3.9's
+    Zarr V3 support) failed exactly this way on a store this plugin
+    reads fine elsewhere on QGIS 3.40 (GDAL 3.11). Not every dataset
+    needs Zarr V3 (many are still V2), so this is a hint, not a
+    diagnosis - only shown when the symptom actually matches.
+    """
+    detail_part = f" ({detail})" if detail else ""
+    msg = f"Variable '{variable}' not found in Zarr store{detail_part}. Available: {available}"
+    if not available:
+        msg += (
+            " — an empty list here usually means your QGIS/GDAL version is too old "
+            "to read this store's format (this dataset may need Zarr V3 support, "
+            "added in GDAL 3.9 / roughly QGIS 3.38+); try upgrading QGIS."
+        )
+    return msg
+
+
+def _open_variable_array(group: "gdal.Group", variable: str):
+    """group.OpenMDArray(variable), raising ExtractError with the list of
+    what's actually in the store either way it can fail: returning None
+    (checked explicitly), or - with GDAL exceptions enabled - raising its
+    own terse RuntimeError ("<name> does not exist") that on its own
+    gives no clue what the array is actually called instead."""
+    try:
+        array = group.OpenMDArray(variable)
+    except RuntimeError as exc:
+        raise ExtractError(
+            variable_not_found_message(variable, group.GetMDArrayNames(), str(exc))
+        ) from exc
+    if array is None:
+        raise ExtractError(variable_not_found_message(variable, group.GetMDArrayNames()))
+    return array
+
+
 # ---------------------------------------------------------------------------
 # Variable matching — mirrors geobridge's normalise-and-compare approach
 # ---------------------------------------------------------------------------
@@ -90,7 +162,7 @@ def _band_matches(want_norm: str, band: "gdal.Band", subdataset_desc: str = "") 
 def _open_netcdf_variable(path: Path, variable: str) -> "gdal.Dataset":
     """Open the NetCDF subdataset matching *variable* (or the only one, or
     all bands of the first grid subdataset if no match/variable given)."""
-    root = gdal.Open(str(path))
+    root = _gdal_open_with_retry(str(path))
     if root is None:
         raise ExtractError(f"GDAL could not open {path} as NetCDF.")
 
@@ -121,7 +193,7 @@ def _open_netcdf_variable(path: Path, variable: str) -> "gdal.Dataset":
 def _open_grib_bands(path: Path, variable: str) -> "gdal.Dataset":
     """Open a GRIB file, keeping only bands matching *variable* (or all,
     if no variable given / nothing matches)."""
-    ds = gdal.Open(str(path))
+    ds = _gdal_open_with_retry(str(path))
     if ds is None:
         raise ExtractError(f"GDAL could not open {path} as GRIB.")
 
@@ -509,12 +581,7 @@ def zarr_to_geotiff(
             raise ExtractError(f"GDAL could not open Zarr store: {zarr_url}")
 
         group = root.GetRootGroup()
-        array = group.OpenMDArray(variable)
-        if array is None:
-            raise ExtractError(
-                f"Variable '{variable}' not found in Zarr store. "
-                f"Available: {group.GetMDArrayNames()}"
-            )
+        array = _open_variable_array(group, variable)
 
         dims = array.GetDimensions()
         dim_names = [d.GetName() for d in dims]
@@ -627,12 +694,7 @@ def zarr_range_to_geotiff(
             raise ExtractError(f"GDAL could not open Zarr store: {zarr_url}")
 
         group = root.GetRootGroup()
-        array = group.OpenMDArray(variable)
-        if array is None:
-            raise ExtractError(
-                f"Variable '{variable}' not found in Zarr store. "
-                f"Available: {group.GetMDArrayNames()}"
-            )
+        array = _open_variable_array(group, variable)
 
         dims = array.GetDimensions()
         dim_names = [d.GetName() for d in dims]

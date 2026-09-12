@@ -20,15 +20,13 @@ slider, mirroring test_temporal_dialog.py's ERA5 block. Export to GeoTIFF
 
 Tab 3 (Time Series): pick a point on the map canvas for the dataset/
 variable currently selected in Tab 2's search results, then fetch its
-value over time via one of two methods (radio buttons):
-
-- "Quick" — one WMTS GetFeatureInfo request per timestep. No auth, no
-  extra install; best for exploratory ranges up to a few dozen/hundred
-  steps.
-- "Full history" — one bulk read off the ARCO Zarr archive. Needs an
-  authenticated CDS API key (Tab 1); best for long/dense ranges, and can
-  aggregate the read down to a daily/weekly/monthly/annual mean/max/min
-  instead of plotting every raw timestep.
+value over time — one bulk read off the ARCO Zarr archive. Needs an
+authenticated CDS API key (Tab 1) and a dataset with a Zarr archive
+(picking a point is disabled otherwise); can aggregate the read down to
+a daily/weekly/monthly/annual mean/max/min instead of plotting every raw
+timestep. (A second, WMTS-GetFeatureInfo-based "Quick" method — no auth
+needed, one HTTP request per timestep — used to live here too; it's been
+removed.)
 
 Tab 4 (Browse by Variable, browse_tab.py — built in code, appended after
 the .ui's own tabs, not defined in the .ui itself): pick a dataset/
@@ -97,7 +95,6 @@ PLAY_INTERVAL_MS = 2000
 PREFETCH_INTERVAL_MS = 150
 DEFAULT_WINDOW_DAYS = 3
 DEFAULT_TS_WINDOW_DAYS = 30
-TS_STEP_CHOICES = (("Daily", 1), ("Weekly", 7), ("Monthly", 30))
 
 # Full history's aggregation choices — codes match gdal_native.timeseries.
 # aggregate_samples' "{period}_{stat}" naming (mirrors export_utils.
@@ -370,7 +367,6 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
 
         self._populate_step_combo()
         self._populate_aggregation_combo()
-        self._populate_ts_step_combo()
 
         # Info icon next to the Step dropdown clarifying it's a sampling
         # interval, not an aggregation — a common point of confusion given
@@ -398,10 +394,10 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         # preview) never reads _search_aoi_bbox at all and always requests
         # global tiles, cropped only by whatever the QGIS canvas happens to
         # show on screen.
-        # Export to GeoTIFF (and, on the Time Series tab, "Full history")
-        # both read straight off the ARCO Zarr archive — a search hit can
-        # be a CDS-API-only dataset with no Zarr backing at all, in which
-        # case btn_export_geotiff/rad_ts_zarr end up disabled with only a
+        # Export to GeoTIFF (and, on the Time Series tab) both read
+        # straight off the ARCO Zarr archive — a search hit can be a
+        # CDS-API-only dataset with no Zarr backing at all, in which case
+        # btn_export_geotiff/btn_pick_point end up disabled with only a
         # tooltip/status-line explanation to go on. This icon says so up
         # front, regardless of which dataset happens to be selected.
         self.lbl_export_info_icon = QtWidgets.QLabel(self.groupBox_export)
@@ -549,13 +545,10 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         self.btn_pick_point.toggled.connect(self._on_pick_point_toggled)
         self.btn_ts_refresh.clicked.connect(self._on_ts_refresh_clicked)
         self.btn_ts_download_csv.clicked.connect(self._on_ts_download_csv_clicked)
-        self.rad_ts_quick.toggled.connect(self._on_ts_method_changed)
-        self.rad_ts_zarr.toggled.connect(self._on_ts_method_changed)
 
         # ARCO Zarr note — at the very top of the tab, above the "Selected
-        # dataset" line, so it's visible immediately rather than only via
-        # the "Full history" radio's own info icon further down. Pushes
-        # everything else on the tab down by _TS_NOTE_SHIFT.
+        # dataset" line, so it's visible immediately. Pushes everything
+        # else on the tab down by _TS_NOTE_SHIFT.
         _TS_NOTE_SHIFT = 34
         self.lbl_ts_zarr_note = QtWidgets.QLabel(self.tab_timeseries)
         self.lbl_ts_zarr_note.setGeometry(10, 8, 520, 30)
@@ -589,60 +582,31 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
             "whatever dataset/variable is currently selected on the Search tab."
         ))
 
-        _TS_LAYOUT_SHIFT = 44 + _TS_NOTE_SHIFT
+        # 10, not 44: the removed Method row used to occupy the extra 34px
+        # between here and btn_pick_point below - closing that gap now
+        # that there's nothing left to show there.
+        _TS_LAYOUT_SHIFT = 10 + _TS_NOTE_SHIFT
         self.lbl_ts_hint.setGeometry(10, 52 + _TS_NOTE_SHIFT, 520, 34)
         for _name in (
-            "lbl_ts_method", "rad_ts_quick", "rad_ts_zarr", "btn_pick_point",
+            "btn_pick_point",
             "lbl_ts_coords", "lbl_ts_start", "dt_ts_start", "lbl_ts_end", "dt_ts_end",
-            "lbl_ts_step", "cmb_ts_step", "btn_ts_refresh",
+            "btn_ts_refresh",
             "progress_ts", "lbl_ts_status", "plot_ts_container", "btn_ts_download_csv",
         ):
             _w = getattr(self, _name)
             _w.move(_w.x(), _w.y() + _TS_LAYOUT_SHIFT)
 
-        # "Full history" reads straight off the ARCO Zarr archive — some
-        # search hits are CDS-API-only datasets with no Zarr backing, for
-        # which this radio is disabled (see has_zarr in _on_search_result_
-        # selected). Static icon so that's clear up front, not just from a
-        # disabled radio's tooltip.
-        self.lbl_ts_zarr_info_icon = QtWidgets.QLabel(self.tab_timeseries)
-        self.lbl_ts_zarr_info_icon.setGeometry(
-            self.rad_ts_zarr.x() + self.rad_ts_zarr.width() + 4, self.rad_ts_zarr.y() + 5, 16, 16
-        )
-        self.lbl_ts_zarr_info_icon.setPixmap(_info_icon(16))
-        self.lbl_ts_zarr_info_icon.setToolTip(_wrap_tooltip(
-            "Only works for ARCO Zarr-backed datasets, not every dataset in "
-            "the catalogue — CDS-API-only datasets can't use Full history. "
-            "This radio is disabled when the currently selected dataset "
-            "doesn't support it."
-        ))
-
-        # Quick has no aggregation — one WMTS GetFeatureInfo value per Step
-        # interval, not a reduction over several — so it's easy to misread
-        # a Step choice like "Monthly" as an aggregated monthly figure.
-        # Clarify with the same hoverable-icon pattern used everywhere else.
-        self.lbl_ts_step_info_icon = QtWidgets.QLabel(self.tab_timeseries)
-        self.lbl_ts_step_info_icon.setGeometry(
-            self.cmb_ts_step.x() + self.cmb_ts_step.width() + 6, self.cmb_ts_step.y() + 5, 16, 16
-        )
-        self.lbl_ts_step_info_icon.setPixmap(_info_icon())
-        self.lbl_ts_step_info_icon.setToolTip(_wrap_tooltip(
-            "Quick reads one raw value every Step interval — it is not "
-            "aggregated/averaged over that interval. For a true daily/"
-            "weekly/monthly/annual mean, max or min, switch to Full history."
-        ))
-
-        # Full history reads the whole native-resolution series in one go,
-        # so — unlike Quick — it can cheaply reduce it to a daily/weekly/
-        # monthly/annual mean/max/min instead of plotting every raw
-        # timestep. Occupies the same row as Step/its info icon and the two
-        # groups are toggled by _on_ts_method_changed, never shown together.
+        # Reads the whole native-resolution series in one go, so it can
+        # cheaply reduce it to a daily/weekly/monthly/annual mean/max/min
+        # instead of plotting every raw timestep — same row Step used to
+        # occupy back when "Quick" (WMTS GetFeatureInfo, no aggregation)
+        # was still an option here.
         self.lbl_ts_agg = QtWidgets.QLabel(self.tab_timeseries)
-        self.lbl_ts_agg.setGeometry(self.lbl_ts_step.geometry())
+        self.lbl_ts_agg.setGeometry(10, 160 + _TS_LAYOUT_SHIFT, 60, 24)
         self.lbl_ts_agg.setText("Aggregation:")
 
         self.cmb_ts_agg = QtWidgets.QComboBox(self.tab_timeseries)
-        self.cmb_ts_agg.setGeometry(self.cmb_ts_step.geometry())
+        self.cmb_ts_agg.setGeometry(80, 158 + _TS_LAYOUT_SHIFT, 150, 26)
         for _label, _code in TS_AGGREGATION_CHOICES:
             self.cmb_ts_agg.addItem(_label, _code)
 
@@ -709,7 +673,7 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         self._load_saved_key()
         self._refresh_dependency_banner()
         self._refresh_aoi_layer_combo()
-        self._on_ts_method_changed()
+        self._refresh_ts_hint()
         self.browse_tab.refresh_datasets()
 
     # ------------------------------------------------------------------ #
@@ -803,11 +767,6 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
                     i, QColor("#2f6fed"), Qt.ItemDataRole.ForegroundRole
                 )
                 self.cmb_aggregation.setItemData(i, bold_font, Qt.ItemDataRole.FontRole)
-
-    def _populate_ts_step_combo(self):
-        self.cmb_ts_step.clear()
-        for label, step_days in TS_STEP_CHOICES:
-            self.cmb_ts_step.addItem(label, step_days)
 
     def _on_search_clicked(self):
         query = self.txt_query.text().strip()
@@ -925,15 +884,12 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
 
         has_zarr = bool(descriptor and getattr(descriptor, "has_zarr", False))
 
-        # "Full history" on the Time Series tab (Tab 3) is a bulk ARCO Zarr
-        # read (gb_wrapper.zarr_point_time_series) — only meaningful for
-        # datasets that actually have a Zarr archive. Force back to "Quick"
-        # if the newly selected dataset doesn't support it and Full history
-        # was still checked, rather than leaving a disabled-but-checked
-        # radio.
-        self.rad_ts_zarr.setEnabled(has_zarr)
-        if not has_zarr and self.rad_ts_zarr.isChecked():
-            self.rad_ts_quick.setChecked(True)
+        # The Time Series tab (Tab 3) is a bulk ARCO Zarr read
+        # (gb_wrapper.zarr_point_time_series) — only meaningful for
+        # datasets that actually have a Zarr archive. Disable picking a
+        # point at all for one that doesn't, rather than letting the user
+        # start a fetch that can only fail; _refresh_ts_hint() explains why.
+        self.btn_pick_point.setEnabled(has_zarr)
 
         # Reset Full history's Aggregation back to Raw on every new Search
         # selection: it's easy to leave it on e.g. "Monthly mean" after
@@ -1800,33 +1756,12 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
     # Tab 3 — point time series
     # ------------------------------------------------------------------ #
 
-    def _ts_method(self) -> str:
-        """'zarr' or 'quick', from the Time Series tab's method radios."""
-        return "zarr" if self.rad_ts_zarr.isChecked() else "quick"
-
-    def _on_ts_method_changed(self, checked: bool = True):
-        # Each radio's toggled() fires twice per switch (once for the
-        # button losing the check, once for the one gaining it) — only
-        # react to the "gained" half, and once at __init__ time via the
-        # default checked=True.
-        if not checked:
-            return
-        is_zarr = self._ts_method() == "zarr"
-        # Quick: Step (thins the per-timestep request loop, no reduction).
-        # Full history: Aggregation (bins the bulk-read series into daily/
-        # weekly/monthly/annual mean/max/min) — the two occupy the same
-        # row and are mutually exclusive, not just enabled/disabled, so
-        # there's never a control visible that method can't act on.
-        self.lbl_ts_step.setVisible(not is_zarr)
-        self.cmb_ts_step.setVisible(not is_zarr)
-        self.lbl_ts_step_info_icon.setVisible(not is_zarr)
-        self.lbl_ts_agg.setVisible(is_zarr)
-        self.cmb_ts_agg.setVisible(is_zarr)
-        self._refresh_ts_hint()
-
     def _refresh_ts_hint(self):
         if self._current_match is None:
-            self.lbl_ts_selected.setText("")
+            # Otherwise this is just blank space above the hint line below
+            # it, with nothing telling you why — before any Search tab
+            # selection exists, this row has nothing to show yet.
+            self.lbl_ts_selected.setText("Select the dataset on the Search tab first.")
             self.lbl_ts_info_icon.setVisible(False)
             self.lbl_ts_hint.setText(
                 'Pick a dataset/variable in the Search tab first, then click '
@@ -1848,11 +1783,11 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         )
         self.lbl_ts_info_icon.setVisible(True)
 
-        note = (
-            "Full history needs an authenticated CDS API key (API Key tab)."
-            if self._ts_method() == "zarr" else
-            "Quick mode works without auth; keep ranges to a few dozen/hundred steps."
-        )
+        has_zarr = bool(self._current_descriptor and getattr(self._current_descriptor, "has_zarr", False))
+        if not has_zarr:
+            note = "This dataset has no ARCO Zarr archive — pick a different dataset/variable on the Search tab."
+        else:
+            note = "Needs an authenticated CDS API key (API Key tab)."
         self.lbl_ts_hint.setText(
             'Click "Pick point on map" then click anywhere on the map canvas. ' + note
         )
@@ -1937,6 +1872,14 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
             QMessageBox.warning(self, "GeoBridge", "End must be after start.")
             return
 
+        if not gb_wrapper.is_authenticated():
+            QMessageBox.warning(
+                self, "GeoBridge",
+                "Full history needs an authenticated CDS API key — save "
+                "one on the API Key tab first.",
+            )
+            return
+
         # Cancelling is non-blocking (it just flags the task); any results
         # it still emits after this point are discarded by the sender()
         # checks in the _on_ts_* slots below, since self._ts_task will
@@ -1946,16 +1889,6 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         # later click reaches this line, and calling .cancel() on it raises
         # "wrapped C/C++ object ... has been deleted" instead of just
         # being a safe no-op.
-        method = self._ts_method()
-        if method == "zarr":
-            if not gb_wrapper.is_authenticated():
-                QMessageBox.warning(
-                    self, "GeoBridge",
-                    "Full history needs an authenticated CDS API key — save "
-                    "one on the API Key tab first.",
-                )
-                return
-
         if self._ts_task is not None:
             try:
                 self._ts_task.cancel()
@@ -1967,13 +1900,9 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         self.btn_ts_download_csv.setEnabled(False)
         self.plot_ts.set_samples([])
         self.lbl_ts_status.setText("Fetching…")
-        if method == "zarr":
-            # One bulk read, not a per-step loop — nothing to report
-            # incremental progress on, so show a busy indicator instead.
-            self.progress_ts.setRange(0, 0)
-        else:
-            self.progress_ts.setRange(0, 100)
-            self.progress_ts.setValue(0)
+        # One bulk read, not a per-step loop — nothing to report
+        # incremental progress on, so show a busy indicator instead.
+        self.progress_ts.setRange(0, 0)
         self.progress_ts.setVisible(True)
 
         params = {
@@ -1983,26 +1912,20 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
             "lat": lat,
             "start": start,
             "end": end,
+            "chunking": None,
+            "aggregation": self.cmb_ts_agg.currentData(),
         }
-        if method == "zarr":
-            params["chunking"] = None
-            params["aggregation"] = self.cmb_ts_agg.currentData()
-        else:
-            params["step_days"] = self.cmb_ts_step.currentData()
 
         self._ts_task = TimeSeriesTask(
-            f"GeoBridge: time series at ({lon:.3f}, {lat:.3f})", method, params
+            f"GeoBridge: time series at ({lon:.3f}, {lat:.3f})", params
         )
-        self._ts_task.progressChanged.connect(self._on_ts_progress)
+        # No progressChanged hookup: it's one bulk read, not a per-step
+        # loop with anything to report — that's why progress_ts is left
+        # in indeterminate/"busy" mode (setRange(0, 0) above) rather than
+        # a real percentage.
         self._ts_task.taskCompleted.connect(self._on_ts_finished_ok)
         self._ts_task.taskTerminated.connect(self._on_ts_finished_err)
         QgsApplication.taskManager().addTask(self._ts_task)
-
-    def _on_ts_progress(self, progress: float):
-        if self.sender() is not self._ts_task:
-            return  # stale signal from a task superseded by a newer click
-        if self.progress_ts.maximum() > 0:  # ignore for the zarr busy indicator
-            self.progress_ts.setValue(int(progress))
 
     def _on_ts_finished_ok(self):
         if self.sender() is not self._ts_task:

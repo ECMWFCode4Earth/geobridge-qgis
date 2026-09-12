@@ -8,15 +8,16 @@ region/time slice at a time, instead of having to submit a job to the CDS
 API queue and download the whole result:
 
 * :doc:`search_tab`'s **Export to GeoTIFF**
-* :doc:`time_series_tab`'s **Full history** method
+* :doc:`time_series_tab` (point time series) as a whole
 
-Every other feature — free-text search, the WMTS preview/time slider,
-**Quick** point time series, and :doc:`browse_tab`'s cascading picker/CDS
-download — works for *any* dataset in the catalogue, ARCO-backed or not.
+Every other feature — free-text search, the WMTS preview/time slider, and
+:doc:`browse_tab`'s cascading picker/CDS download — works for *any* dataset
+in the catalogue, ARCO-backed or not.
 
 Not every dataset has an ARCO Zarr archive. When the currently selected
-dataset doesn't, **Export to GeoTIFF** and **Full history** are disabled
-with an explanation, rather than failing after you click them.
+dataset doesn't, **Export to GeoTIFF** is disabled and **Pick point on
+map** on the Time Series tab is disabled, both with an explanation,
+rather than failing after you click them.
 
 Datasets with an ARCO Zarr archive
 -------------------------------------

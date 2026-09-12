@@ -9,6 +9,15 @@ Requirements
   features — register at `cds.climate.copernicus.eu
   <https://cds.climate.copernicus.eu>`_.
 
+.. note::
+   A handful of datasets are stored in the newer **Zarr V3** format, which
+   needs GDAL 3.9 or later (bundled with roughly **QGIS 3.38+**) to read.
+   On an older QGIS/GDAL, those specific datasets fail with an error like
+   *"Variable '<name>' not found in Zarr store"* even though nothing is
+   actually wrong with the dataset or your request — everything else in
+   the plugin is unaffected. If you hit that error, updating QGIS is the
+   fix, not anything in this plugin.
+
 Installing the plugin
 ----------------------
 

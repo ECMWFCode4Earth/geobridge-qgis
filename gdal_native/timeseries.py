@@ -3,51 +3,31 @@
 gdal_native.timeseries
 ~~~~~~~~~~~~~~~~~~~~~~
 
-Point value time series, two ways — ported from
-geobridge/modules/timeseries.py.
+Point value time series, read out of an ARCO Zarr archive — ported from
+geobridge/modules/timeseries.py's zarr_point_time_series. The original
+read the whole point series via xarray's `.sel(..., method="nearest")` +
+`.sel(time=slice(start, end))`; this version does the same access pattern
+through GDAL's Zarr multidim driver instead — find the nearest lat/lon
+index, the time-range index bounds, slice the MDArray down to a 1-D
+(time,) view at that point, and read it directly (no `AsClassicDataset`
+needed here — there's no raster to write, just a value series).
 
-`point_value`/`point_time_series` (the "Quick" path): WMTS GetFeatureInfo,
-one lightweight HTTP request per time step. Already pure stdlib in the
-original (json/urllib.request/math) — ported near-verbatim, using this
-package's own wmts.wmts_layer() instead of geobridge's.
-
-`zarr_point_time_series` (the "Full history" path): the original read the
-whole point series out of the ARCO Zarr archive via xarray's `.sel(...,
-method="nearest")` + `.sel(time=slice(start, end))`. This version does the
-same access pattern through GDAL's Zarr multidim driver instead — find
-the nearest lat/lon index, the time-range index bounds, slice the MDArray
-down to a 1-D (time,) view at that point, and read it directly (no
-`AsClassicDataset` needed here — there's no raster to write, just a value
-series).
+The tab this powers used to offer a second, WMTS-GetFeatureInfo-based
+"Quick" method (no auth needed, one HTTP request per timestep) alongside
+this one; that method (point_value/point_time_series) has been removed.
 """
 
 from __future__ import annotations
 
-import json
-import logging
-import math
-import time
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Callable, Optional, Union
-
-from . import wmts as wmts_mod
-from .discover import discover_one
-
-logger = logging.getLogger(__name__)
+from typing import Optional, Union
 
 DateLike = Union[str, datetime]
 
-_TILE_SIZE = 256
-_USER_AGENT = "gdal_native"
-_REQUEST_TIMEOUT = 30
-
 
 class TimeSeriesError(RuntimeError):
-    """Raised when a GetFeatureInfo request/response, or a Zarr point
-    read, is invalid."""
+    """Raised when a Zarr point read is invalid."""
 
 
 @dataclass
@@ -113,133 +93,6 @@ def aggregate_samples(samples: list, aggregation: str = "raw") -> list:
 
 
 # ---------------------------------------------------------------------------
-# WMTS GetFeatureInfo path ("Quick")
-# ---------------------------------------------------------------------------
-
-def _lonlat_to_tile_pixel(lon: float, lat: float, zoom: int):
-    """Convert lon/lat to (col, row, pixel_i, pixel_j) for Web Mercator
-    (EPSG:3857) — standard slippy-map tile scheme, matching the XYZ tile
-    convention wmts.py already relies on for QGIS."""
-    lat = max(min(lat, 85.05112878), -85.05112878)
-    n = 2 ** zoom
-    x = (lon + 180.0) / 360.0 * n
-    lat_rad = math.radians(lat)
-    y = (1.0 - math.log(math.tan(lat_rad) + 1.0 / math.cos(lat_rad)) / math.pi) / 2.0 * n
-
-    col = int(x)
-    row = int(y)
-    pixel_i = int((x - col) * _TILE_SIZE)
-    pixel_j = int((y - row) * _TILE_SIZE)
-    return col, row, pixel_i, pixel_j
-
-
-def _fetch_value(url: str) -> Optional[float]:
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    try:
-        with urllib.request.urlopen(req, timeout=_REQUEST_TIMEOUT) as resp:
-            data = json.loads(resp.read().decode())
-    except (urllib.error.URLError, TimeoutError) as exc:
-        raise TimeSeriesError(f"GetFeatureInfo request failed: {exc}") from exc
-    except json.JSONDecodeError as exc:
-        raise TimeSeriesError(f"GetFeatureInfo response was not valid JSON: {exc}") from exc
-
-    features = data.get("features") or []
-    if not features:
-        return None
-    return features[0].get("properties", {}).get("value")
-
-
-def point_value(
-    dataset: str, variable: str, lon: float, lat: float, time: DateLike,
-    zoom: int = 8, style: str = "default", descriptor=None,
-) -> Optional[float]:
-    """Query the cell value at a single point and time via GetFeatureInfo.
-    Returns None if the point falls outside the data mask."""
-    layer = wmts_mod.wmts_layer(dataset, variable, time, style=style, descriptor=descriptor)
-    col, row, i, j = _lonlat_to_tile_pixel(lon, lat, zoom)
-    url = layer.feature_info_url(zoom, col, row, i, j) if hasattr(layer, "feature_info_url") \
-        else _feature_info_url(layer, zoom, col, row, i, j)
-    return _fetch_value(url)
-
-
-def _feature_info_url(layer, zoom, col, row, pixel_i, pixel_j):
-    """wmts.WmtsLayer doesn't carry feature_info_url (only to_qgis()) —
-    build the GetFeatureInfo URL the same way geobridge's WmtsLayer does."""
-    import urllib.parse as _up
-    params = {
-        "SERVICE": "WMTS", "REQUEST": "GetFeatureInfo", "VERSION": "1.0.0",
-        "LAYER": layer.layer_name, "STYLE": layer.style,
-        "FORMAT": "image/png", "TILEMATRIXSET": layer.tile_matrix_set,
-        "TILEMATRIX": str(zoom), "TILEROW": str(row), "TILECOL": str(col),
-        "TIME": layer.datetime_str, "INFOFORMAT": "application/json",
-        "I": str(pixel_i), "J": str(pixel_j),
-    }
-    return layer.base_url + "?" + _up.urlencode(params)
-
-
-def point_time_series(
-    *,
-    dataset: str, variable: str, lon: float, lat: float,
-    start: DateLike, end: DateLike, step_days: float = 1,
-    zoom: int = 8, style: str = "default",
-    progress_callback: Optional[Callable[[int, int], None]] = None,
-    is_canceled: Optional[Callable[[], bool]] = None,
-) -> list:
-    """Extract a value time series at a point using WMTS GetFeatureInfo,
-    one request per time step, with pacing/retry against the connection
-    resets ECMWF's WMTS server can produce under back-to-back requests,
-    and optional progress/cancellation for a long-running background task.
-    """
-    if isinstance(start, str):
-        start = datetime.fromisoformat(start.replace("Z", "+00:00") if "T" in start else start)
-    if isinstance(end, str):
-        end = datetime.fromisoformat(end.replace("Z", "+00:00") if "T" in end else end)
-    step = timedelta(days=step_days)
-
-    descriptor = discover_one(dataset)
-    if descriptor is None:
-        raise TimeSeriesError(
-            f"Could not discover dataset {dataset!r}. "
-            "Check the identifier or call discover() to list options."
-        )
-
-    _REQUEST_PACING_SECONDS = 0.1
-    _MAX_RETRIES = 2
-    _RETRY_DELAY_SECONDS = 1.0
-
-    total = max(int((end - start) / step) + 1, 1)
-    samples = []
-    current = start
-    done = 0
-    while current <= end:
-        if is_canceled is not None and is_canceled():
-            break
-
-        value = None
-        for attempt in range(_MAX_RETRIES + 1):
-            try:
-                value = point_value(
-                    dataset, variable, lon, lat, current,
-                    zoom=zoom, style=style, descriptor=descriptor,
-                )
-                break
-            except TimeSeriesError:
-                if attempt == _MAX_RETRIES:
-                    value = None
-                else:
-                    time.sleep(_RETRY_DELAY_SECONDS)
-
-        samples.append(PointSample(time=current, value=value))
-        done += 1
-        if progress_callback is not None:
-            progress_callback(done, total)
-        current += step
-        time.sleep(_REQUEST_PACING_SECONDS)
-
-    return samples
-
-
-# ---------------------------------------------------------------------------
 # ARCO Zarr point path ("Full history")
 # ---------------------------------------------------------------------------
 
@@ -286,8 +139,7 @@ def zarr_point_time_series(
 ) -> list:
     """Read one point's full time series directly out of an ARCO Zarr
     store via GDAL's Zarr driver — the whole range in one set of chunked
-    HTTPS range-requests, rather than point_time_series()'s one
-    GetFeatureInfo request per step. Snaps to the nearest grid cell (no
+    HTTPS range-requests. Snaps to the nearest grid cell (no
     interpolation).
     """
     from osgeo import gdal
@@ -311,12 +163,23 @@ def zarr_point_time_series(
             raise TimeSeriesError(f"GDAL could not open Zarr store: {zarr_url}")
 
         group = root.GetRootGroup()
-        array = group.OpenMDArray(variable)
-        if array is None:
+        # With GDAL exceptions enabled (_safe_use_exceptions above),
+        # OpenMDArray() raises its own terse RuntimeError ("<name> does
+        # not exist") for a missing array instead of returning None - the
+        # `array is None` branch below is dead code for that case, and
+        # the user only ever sees GDAL's bare message with no list of
+        # what *is* actually in the store to compare against. Catch it
+        # and re-raise with that list, same as the `is None` branch does.
+        from .extract_gdal import variable_not_found_message
+
+        try:
+            array = group.OpenMDArray(variable)
+        except RuntimeError as exc:
             raise TimeSeriesError(
-                f"Variable '{variable}' not found in Zarr store. "
-                f"Available: {group.GetMDArrayNames()}"
-            )
+                variable_not_found_message(variable, group.GetMDArrayNames(), str(exc))
+            ) from exc
+        if array is None:
+            raise TimeSeriesError(variable_not_found_message(variable, group.GetMDArrayNames()))
 
         dims = array.GetDimensions()
         dim_names = [d.GetName() for d in dims]

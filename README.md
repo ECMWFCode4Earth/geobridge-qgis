@@ -27,6 +27,11 @@ time-stepped WMTS layer directly on the map — with a play/pause slider to scru
 This plugin is a thin wrapper. All discovery, semantic search, and WMTS URL logic lives in
 `geobridge`; nothing is reimplemented here.
 
+> **Note:** QGIS 3.28+ covers almost everything, but a handful of datasets use the newer Zarr V3
+> format, which needs GDAL 3.9+ (bundled with roughly **QGIS 3.38+**) to read. On an older
+> install those specific datasets fail with a "Variable not found in Zarr store" error — see
+> [Installation](https://geobridge-qgis.readthedocs.io/en/latest/installation.html) for details.
+
 <p align="center">
   <img src="docs/_static/screenshots/search_tab.png" width="700" alt="The Search tab: semantic search results, area of interest, time range, and Export to GeoTIFF with a color legend" />
 </p>
