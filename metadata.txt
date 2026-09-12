@@ -2,7 +2,7 @@
 name=GeoBridge
 qgisMinimumVersion=3.28
 description=Discover, semantically search, and preview Copernicus climate data (ERA5, CAMS, CEMS) as WMTS layers directly in QGIS, built entirely on QGIS's own bundled GDAL.
-version=0.1.33
+version=0.1.34
 author=GeoBridge contributors
 email=iliasmachairas@outlook.com
 
@@ -16,7 +16,8 @@ repository=https://github.com/ECMWFCode4Earth/geobridge-qgis
 tracker=https://github.com/ECMWFCode4Earth/geobridge-qgis/issues
 
 hasProcessingProvider=no
-changelog=0.1.33 Search tab: the "Export failed: ..." status box could cut off a long error message (e.g. the Zarr V3 "Available: None" explanation) — given more room, and now also points to View → Panels → Log Messages → GeoBridge for the full text, matching 0.1.32's Browse-tab fix. Docs: add a Troubleshooting section covering that exact error (old QGIS/GDAL, needs Zarr V3 support) with the fix for each platform, and a note about where to find a full error when the in-app message looks cut off.
+changelog=0.1.34 Shortened the "Variable not found in Zarr store" error (the old-QGIS/GDAL one from 0.1.33's new Troubleshooting page) — no more confusing "Available: None"; on the Search tab it's now followed by a clickable link straight to that Troubleshooting section instead of repeating the explanation inline. Time Series tab: this same error is now also logged in full (with a stack trace) to Log Messages → GeoBridge, matching Search/Browse's exports.
+    0.1.33 Search tab: the "Export failed: ..." status box could cut off a long error message (e.g. the Zarr V3 "Available: None" explanation) — given more room, and now also points to View → Panels → Log Messages → GeoBridge for the full text, matching 0.1.32's Browse-tab fix. Docs: add a Troubleshooting section covering that exact error (old QGIS/GDAL, needs Zarr V3 support) with the fix for each platform, and a note about where to find a full error when the in-app message looks cut off.
     0.1.32 A failed "Export to GeoTIFF"/"Download GeoTIFF" now logs the full error, including a full stack trace, to View → Panels → Log Messages → GeoBridge, and the on-screen message on the Browse by Variable tab now says to check there — the narrow, fixed-size status label couldn't reliably show a long error in full.
     0.1.31 Two fixes from the Browse by Variable tab: (1) Download GeoTIFF could fail with "There is no affine transformation and no GCPs" for some datasets (confirmed on derived-era5-land-daily-statistics) — the downloaded file is NetCDF4, whose container format is literally HDF5, and GDAL was sometimes auto-picking its plain HDF5 driver instead of its netCDF one, losing all CF-convention georeferencing in the process; now the netCDF driver is forced explicitly rather than left to auto-detection. (2) The Area of interest summary's second line (once real coordinates are set) could get clipped in this tab's narrower right-hand column — it's genuinely layout-managed here (unlike the Search tab's equivalent, fixed in 0.1.29), but had nowhere to grow into within this tab's fixed window size; that window now has more headroom.
     0.1.30 Search tab: fix the variable/"Dataset details" line under a selected result getting clipped when the dataset's title is long enough to wrap onto two lines itself (e.g. "CERRA sub-daily regional reanalysis data for Europe on single levels from 1984 to present") — confirmed in a Linux screenshot. Also corrects a mistake in 0.1.29's fix: it moved the right-column "Export to GeoTIFF" box in step with the left-column AOI box, which aren't related to each other — groupBox_export no longer moves for a left-column-only change.

@@ -114,14 +114,21 @@ def variable_not_found_message(variable: str, available: list, detail: str = "")
     diagnosis - only shown when the symptom actually matches.
     """
     detail_part = f" ({detail})" if detail else ""
-    msg = f"Variable '{variable}' not found in Zarr store{detail_part}. Available: {available}"
     if not available:
-        msg += (
-            " — an empty list here usually means your QGIS/GDAL version is too old "
-            "to read this store's format (this dataset may need Zarr V3 support, "
-            "added in GDAL 3.9 / roughly QGIS 3.38+); try upgrading QGIS."
+        # An empty list is the tell — see this function's docstring — so
+        # showing it as "Available: []" adds nothing a user can act on;
+        # say what it actually means instead. Deliberately doesn't tell
+        # the user where to go from here — the "Zarr V3" phrase is what
+        # geobridge_plugin_dialog._format_task_error() matches on to
+        # append a proper (clickable, where the label supports it) link
+        # to installation.rst's Troubleshooting section; duplicating that
+        # pointer here as plain text would double up with it. Keep the
+        # exact phrase "Zarr V3" if editing this — that match relies on it.
+        return (
+            f"Variable '{variable}' not found in Zarr store{detail_part}. "
+            "Your QGIS/GDAL is likely too old to read this dataset's Zarr V3 format."
         )
-    return msg
+    return f"Variable '{variable}' not found in Zarr store{detail_part}. Available: {available}"
 
 
 def _open_variable_array(group: "gdal.Group", variable: str):

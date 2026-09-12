@@ -18,7 +18,9 @@ at all.
 
 from __future__ import annotations
 
-from qgis.core import QgsTask
+import traceback
+
+from qgis.core import Qgis, QgsMessageLog, QgsTask
 
 from . import gdal_wrapper as gb_wrapper
 
@@ -31,6 +33,7 @@ class TimeSeriesTask(QgsTask):
         self.params = params
         self.samples = None
         self.exception = None
+        self.traceback = None
 
     def run(self) -> bool:
         try:
@@ -39,5 +42,16 @@ class TimeSeriesTask(QgsTask):
             self.samples = gb_wrapper.zarr_point_time_series(**self.params)
         except Exception as exc:  # noqa: BLE001 — surfaced via self.exception
             self.exception = exc
+            # Captured here, on the worker thread, while it's still live —
+            # see ExportTask.run()'s matching comment for why.
+            self.traceback = traceback.format_exc()
             return False
         return True
+
+    def finished(self, result: bool):
+        if not result and self.exception is not None:
+            QgsMessageLog.logMessage(
+                f"GeoBridge time series failed: {self.exception}\n{self.traceback or ''}",
+                LOG_TAG,
+                Qgis.MessageLevel.Critical,
+            )

@@ -170,19 +170,21 @@ Authentication is only required for downloads and full-history time series
 Troubleshooting
 ----------------
 
-"Export failed: Variable '<name>' not found in Zarr store ... Available: None"
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.. _zarr-v3-old-gdal:
+
+"Variable not found in Zarr store" / "Your QGIS/GDAL is likely too old"
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 You'll see this on the Search tab's "Export to GeoTIFF" or the Time
 Series tab, worded roughly like:
 
     Export failed: Variable 't2m' not found in Zarr store (Array t2m
-    does not exist). Available: None — an empty list here usually means
-    your QGIS/GDAL version is too old to read this store's format (this
-    dataset may need Zarr V3 support, added in GDAL 3.9 / roughly QGIS
-    3.38+); try upgrading QGIS.
+    does not exist). Your QGIS/GDAL is likely too old to read this
+    dataset's Zarr V3 format.
 
-An empty ``Available:`` list is the tell — GDAL opened the store's
+On the Search tab, that's followed by a clickable link straight back
+to this page. The underlying cause either way is the same — an empty
+list of what GDAL *did* find is the tell: it opened the store's
 connection fine but couldn't enumerate anything inside it at all, which
 in practice has meant an older bundled GDAL that doesn't understand
 this store's newer **Zarr V3** metadata yet. Nothing is wrong with the

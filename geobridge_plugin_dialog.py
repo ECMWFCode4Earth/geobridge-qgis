@@ -92,10 +92,39 @@ SETTINGS_KEY_LAST_EXPORT_DIR = "GeoBridge/last_export_dir"
 SETTINGS_KEY_LAST_TS_CSV_DIR = "GeoBridge/last_ts_csv_dir"
 DOCS_URL = "https://geobridge-qgis.readthedocs.io/en/latest/"
 ARCO_ZARR_DOCS_URL = DOCS_URL + "arco_zarr.html"
+# Explicit RST target (installation.rst), not an auto-slugified heading —
+# stays valid even if that section's wording changes later.
+ZARR_V3_TROUBLESHOOTING_URL = DOCS_URL + "installation.html#zarr-v3-old-gdal"
 PLAY_INTERVAL_MS = 2000
 PREFETCH_INTERVAL_MS = 150
 DEFAULT_WINDOW_DAYS = 3
 DEFAULT_TS_WINDOW_DAYS = 30
+
+
+def _format_task_error(exc, link: bool = True) -> str:
+    """Build the text for a failed export/download/time-series task's
+    on-screen status label.
+
+    The full error (and a full traceback) is always written in full to
+    View -> Panels -> Log Messages -> GeoBridge (see ExportTask/
+    TimeSeriesTask's finished()) — these on-screen labels are small and
+    can't reliably show a long message in full, so this always points
+    there. For the specific "old QGIS/GDAL, needs Zarr V3" case (see
+    extract_gdal.variable_not_found_message), when `link` is true it also
+    links straight to the docs section that explains it and walks through
+    the fix, rather than making a user who's already reading a wall of
+    text go find that section themselves — pass link=False for a label
+    that isn't set up for rich text/clickable links (openExternalLinks +
+    TextBrowserInteraction) and doesn't have height to spare for a second
+    line, so it always gets the plain one-line-friendly fallback instead.
+    """
+    text = str(exc)
+    if link and "Zarr V3" in text:
+        return (
+            f"{text}<br>(<a href=\"{ZARR_V3_TROUBLESHOOTING_URL}\">"
+            "see the docs for how to fix this</a>)"
+        )
+    return f"{text}\n(see View → Panels → Log Messages → GeoBridge for the full error)"
 
 # Full history's aggregation choices — codes match gdal_native.timeseries.
 # aggregate_samples' "{period}_{stat}" naming (mirrors export_utils.
@@ -1565,14 +1594,11 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
 
     def _on_browse_download_err(self):
         exc = self._browse_export_task.exception if self._browse_export_task else None
-        # The full error (and a full traceback) is always logged in full to
-        # View -> Panels -> Log Messages -> GeoBridge (see ExportTask.
-        # finished()) — this on-screen label sits in a narrow, fixed-size
-        # column and can't reliably show a long message in full, so it
-        # points there rather than risk clipping it.
+        # link=False: this CDS-download path never actually hits the Zarr
+        # V3 case (that's specific to the ARCO Zarr path), and lbl_status
+        # isn't set up for rich text/clickable links anyway.
         self.browse_tab.lbl_status.setText(
-            f"Download failed: {exc}\n(see View → Panels → Log Messages → "
-            "GeoBridge for the full error)"
+            f"Download failed: {_format_task_error(exc, link=False)}"
         )
 
     # ------------------------------------------------------------------ #
@@ -1840,15 +1866,7 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         self.progress_export.setVisible(False)
         self.progress_export.setRange(0, 100)
         exc = self._export_task.exception if self._export_task else None
-        # The full error (and a full traceback) is always logged in full to
-        # View -> Panels -> Log Messages -> GeoBridge (see ExportTask.
-        # finished()) — this on-screen label is a bit taller now (see the
-        # .ui) but still can't guarantee showing a long message (like the
-        # Zarr V3 / old-GDAL explanation) in full, so it points there too.
-        self.lbl_export_status.setText(
-            f"Export failed: {exc}\n(see View → Panels → Log Messages → "
-            "GeoBridge for the full error)"
-        )
+        self.lbl_export_status.setText(f"Export failed: {_format_task_error(exc)}")
 
     # ------------------------------------------------------------------ #
     # Tab 3 — point time series
@@ -2053,7 +2071,8 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         exc = self._ts_task.exception
         self._ts_task = None  # done — nothing left to ever .cancel()
         self.lbl_ts_status.setText(
-            "Cancelled." if exc is None else f"Time series failed: {exc}"
+            "Cancelled." if exc is None
+            else f"Time series failed: {_format_task_error(exc, link=False)}"
         )
 
     def _on_ts_download_csv_clicked(self):
