@@ -174,17 +174,28 @@ def _variable_meta(dataset_id: str, variable: str) -> dict:
         fallback_unit = _fallback_unit(dataset_id, variable)
         if fallback_unit:
             meta["unit"] = fallback_unit
-    # CF convention's "1" means dimensionless (e.g. a 0-1 fraction like
-    # cloud cover) - technically a unit, but showing the literal digit
-    # "1" next to a value ("0.52 1") reads as a typo, not a unit. Blank it
-    # out here so every caller (legend, Time Series plot) gets the same
-    # "no unit to show" behavior a genuinely missing unit already gets,
-    # and flag it separately so a caller can still say so once, near the
-    # variable name, instead of on every value.
-    if meta.get("unit") == "1":
+    # The bundled catalogue's source datasets spell "no real physical
+    # unit" several different ways depending on which upstream product a
+    # variable came from - CF convention's "1" (e.g. a 0-1 fraction like
+    # cloud cover), but also "~", "dimensionless", "1.0", "Numeric" (fire-
+    # danger indices), "Fraction"/"(0-1)" (ice concentration), "index
+    # value", etc. - all technically "units", but showing one of these
+    # literally next to a value ("0.52 ~", "12.4 Numeric") reads as a
+    # typo, not a unit. Blank it out here so every caller (legend, Time
+    # Series plot) gets the same "no unit to show" behavior a genuinely
+    # missing unit already gets, and flag it separately so a caller can
+    # still say so once, near the variable name, instead of on every
+    # value.
+    if (meta.get("unit") or "").strip().lower() in _DIMENSIONLESS_UNIT_MARKERS:
         meta["unit"] = ""
         meta["dimensionless"] = True
     return meta
+
+
+_DIMENSIONLESS_UNIT_MARKERS = {
+    "1", "1.0", "~", "dimensionless", "numeric", "fraction",
+    "(0-1)", "(0 - 1)", "index value",
+}
 
 
 def _fallback_unit(dataset_id: str, variable: str) -> str:

@@ -516,6 +516,12 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         _search_note_font = QFont(self.lbl_search_zarr_note.font())
         _search_note_font.setItalic(True)
         self.lbl_search_zarr_note.setFont(_search_note_font)
+        # Same accent blue used for links/highlighted choices elsewhere in
+        # this dialog (e.g. lbl_search_selection, the "raw" aggregation
+        # entries) — ties this note visually to its own "see more" link
+        # and reads as "worth noting", not an error/warning (nothing else
+        # here uses red, and this isn't something broken).
+        self.lbl_search_zarr_note.setStyleSheet("color: #2f6fed;")
 
         _SEARCH_LAYOUT_SHIFT = 34
         for _name in (
@@ -562,6 +568,9 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         _ts_note_font = QFont(self.lbl_ts_zarr_note.font())
         _ts_note_font.setItalic(True)
         self.lbl_ts_zarr_note.setFont(_ts_note_font)
+        # Same accent blue as the Search tab's matching note — see its
+        # comment for why (ties to the "see more" link, not an error).
+        self.lbl_ts_zarr_note.setStyleSheet("color: #2f6fed;")
 
         # Two-line "Selected dataset: <title>" / "variable <code> (<friendly
         # name>)" block, plus a hoverable info icon clarifying that this tab

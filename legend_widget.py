@@ -101,11 +101,16 @@ class VariableLegendWidget(QWidget):
         ramp = _RAMPS.get(palette, _FALLBACK_RAMP)
 
         if self._variable_label:
+            # Unit goes here, once, rather than repeated on every tick
+            # label below — five tick boxes each carrying their own " K"/
+            # " W m-2"/etc. suffix ran out of room and started
+            # overlapping, especially for longer units.
+            title = self._variable_label + (f"  [{unit}]" if unit else "")
             painter.setPen(QPen(self.palette().text().color()))
             painter.drawText(
                 QRectF(_MARGIN, 0, rect.width() - 2 * _MARGIN, 18),
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                self._variable_label,
+                title,
             )
 
         bar_rect = QRectF(
@@ -118,7 +123,6 @@ class VariableLegendWidget(QWidget):
         painter.setPen(QPen(self.palette().mid().color()))
         painter.drawRect(bar_rect)
 
-        unit_suffix = f" {unit}" if unit else ""
         tick_pen = QPen(self.palette().mid().color())
         text_pen = QPen(self.palette().text().color())
         label_top = bar_rect.bottom() + _TICK_HEIGHT + 2
@@ -131,7 +135,7 @@ class VariableLegendWidget(QWidget):
             )
 
             value = vmin + frac * (vmax - vmin)
-            label = f"{value:.3g}{unit_suffix}"
+            label = f"{value:.3g}"
             painter.setPen(text_pen)
             if frac <= 0.0:
                 label_rect = QRectF(x, label_top, _TICK_LABEL_WIDTH, 16)
