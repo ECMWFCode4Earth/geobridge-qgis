@@ -15,9 +15,8 @@
 </p>
 
 > **Disclaimer:** GeoBridge was built by the participants listed under [Authors](#-authors)
-> as a project for [ECMWF's Code for Earth](https://codeforearth.ecmwf.int/) program. It is an
-> independent community contribution — **not an official ECMWF product**, and not maintained or
-> supported by ECMWF.
+> as part of an ECMWF-affiliated open-source program. It is an independent community
+> contribution — **not an official ECMWF product**, and not maintained or supported by ECMWF.
 
 A QGIS 3 plugin that discovers, semantically searches, and previews Copernicus climate data
 (ERA5, CAMS, CEMS) as WMTS layers directly in QGIS, and exports selections to GeoTIFF — built
@@ -136,9 +135,8 @@ MIT. See `LICENSE`.
 
 ## 👥 Authors
 
-Built during [ECMWF's Code for Earth](https://codeforearth.ecmwf.int/) program. This is an
-independent participant project, not an official ECMWF product, and it isn't maintained or
-supported by ECMWF.
+Built as part of an ECMWF-affiliated open-source program. This is an independent participant
+project, not an official ECMWF product, and it isn't maintained or supported by ECMWF.
 
 **Mentors**
 - Angel Lopez Alos
