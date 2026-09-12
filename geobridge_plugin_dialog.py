@@ -1840,7 +1840,15 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         self.progress_export.setVisible(False)
         self.progress_export.setRange(0, 100)
         exc = self._export_task.exception if self._export_task else None
-        self.lbl_export_status.setText(f"Export failed: {exc}")
+        # The full error (and a full traceback) is always logged in full to
+        # View -> Panels -> Log Messages -> GeoBridge (see ExportTask.
+        # finished()) — this on-screen label is a bit taller now (see the
+        # .ui) but still can't guarantee showing a long message (like the
+        # Zarr V3 / old-GDAL explanation) in full, so it points there too.
+        self.lbl_export_status.setText(
+            f"Export failed: {exc}\n(see View → Panels → Log Messages → "
+            "GeoBridge for the full error)"
+        )
 
     # ------------------------------------------------------------------ #
     # Tab 3 — point time series
