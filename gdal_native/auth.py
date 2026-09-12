@@ -90,7 +90,7 @@ def _resolve_key(explicit_key: Optional[str]) -> str:
     raise AuthenticationError(
         "No CDS API key found. Provide one via:\n"
         "  1. authenticate(key='your-key')\n"
-        "  2. export CDS_API_KEY='your-key'\n"
+        "  2. export CDS_API_KEY='your-key'\n"  # pragma: allowlist secret - placeholder text, not a real key
         "  3. echo 'key: your-key' >> ~/.cdsapirc\n\n"
         "Get your key at: https://cds.climate.copernicus.eu/profile"
     )

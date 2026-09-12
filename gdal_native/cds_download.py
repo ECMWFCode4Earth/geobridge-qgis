@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import auth
+from .http_utils import safe_urlopen
 
 logger = logging.getLogger(__name__)
 
@@ -62,13 +63,13 @@ def _auth_headers() -> dict:
 def _post_json(url: str, payload: dict, timeout: int = 30) -> dict:
     data = json.dumps(payload).encode()
     req = urllib.request.Request(url, data=data, headers=_auth_headers(), method="POST")
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    with safe_urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read())
 
 
 def _get_json(url: str, timeout: int = 30) -> dict:
     req = urllib.request.Request(url, headers=_auth_headers())
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    with safe_urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read())
 
 
@@ -86,7 +87,7 @@ def _download_file(url: str, dest_file, timeout: int = 300) -> None:
     import shutil
 
     req = urllib.request.Request(url, headers=_auth_headers())
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    with safe_urlopen(req, timeout=timeout) as resp:
         shutil.copyfileobj(resp, dest_file)
 
 

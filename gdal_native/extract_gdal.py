@@ -51,7 +51,8 @@ def _safe_use_exceptions() -> None:
     """
     try:
         gdal.UseExceptions()
-    except Exception:
+    except Exception:  # nosec B110
+        # Deliberately unconditional - see docstring above.
         pass
 
 

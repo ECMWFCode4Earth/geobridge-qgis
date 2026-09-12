@@ -24,6 +24,8 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any, Optional
 
+from .http_utils import safe_urlopen
+
 logger = logging.getLogger(__name__)
 
 
@@ -116,7 +118,7 @@ def _fetch_json(url: str, timeout: int = 20) -> Any:
         url,
         headers={"Accept": "application/json", "User-Agent": "gdal_native/0.1"},
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    with safe_urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read())
 
 
@@ -157,7 +159,12 @@ def _snapshot_link(dataset_id: str, cds_id: str, rel: str) -> Optional[str]:
         entry = snapshot.get(cds_id) or snapshot.get(dataset_id)
         if entry:
             return (entry.get("links") or {}).get(rel)
-    except Exception:
+    except (ImportError, OSError, ValueError, KeyError, AttributeError, TypeError):
+        # Best-effort lookup against a bundled file: a missing/malformed
+        # snapshot or an unexpectedly-shaped entry should fall through to
+        # None (the caller falls back to a live catalogue lookup), not
+        # crash - but narrowed to the exception types those specific
+        # failure modes actually raise, not every possible exception.
         pass
     return None
 
