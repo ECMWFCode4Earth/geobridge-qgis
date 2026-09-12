@@ -5,14 +5,17 @@ GeoBridge QGIS Plugin
    :width: 48px
    :align: left
 
-GeoBridge is a QGIS 3 plugin that wraps the `geobridge
-<https://github.com/ECMWFCode4Earth/GeoBridge>`_ Python library: discover,
-semantically search, and preview Copernicus climate data (ERA5, CAMS, CEMS)
-as WMTS layers directly in QGIS, and export selections to GeoTIFF.
+GeoBridge is a QGIS 3 plugin that discovers, semantically searches, and
+previews Copernicus climate data (ERA5, CAMS, CEMS) as WMTS layers directly
+in QGIS, and exports selections to GeoTIFF — built entirely on QGIS's own
+bundled GDAL, with no extra Python packages to install.
 
-This plugin is a thin wrapper — all discovery, semantic search, and WMTS/
-GeoTIFF logic lives in the ``geobridge`` library; nothing is reimplemented
-here.
+.. note::
+   **Disclaimer:** GeoBridge was built for `ECMWF's Code for Earth
+   <https://codeforearth.ecmwf.int/>`_ program by participants Ilias
+   Machairas and Konstantinos Fokeas. It is an independent community
+   contribution — **not an official ECMWF product**, and it is not
+   maintained or supported by ECMWF.
 
 Plugin source: https://github.com/ECMWFCode4Earth/geobridge-qgis
 
