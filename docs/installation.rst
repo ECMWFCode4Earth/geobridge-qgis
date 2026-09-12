@@ -24,6 +24,71 @@ Requirements
    If you hit that error, updating QGIS/GDAL is the fix, not anything in
    this plugin.
 
+Updating QGIS/GDAL on Linux
+------------------------------
+
+On Windows and macOS, installing a recent QGIS is usually enough on its
+own — the official installer bundles a matching GDAL. On Linux this can
+need two separate steps, because your distro's own package repos are
+often frozen at an older GDAL than what the *official QGIS* repo expects
+(confirmed in practice: Ubuntu 24.04's own repos ship GDAL 3.8.4, below
+the 3.9 threshold, even after upgrading QGIS itself to a current
+version — QGIS just links against whatever GDAL the system already has).
+
+**1. Remove any existing QGIS** installed from your distro's default repo:
+
+.. code-block:: bash
+
+   sudo apt remove --purge qgis qgis-common qgis-plugin-grass
+   sudo apt autoremove
+
+**2. Install QGIS from the official repo** (this example targets the LTR
+line — use ``https://qgis.org/ubuntu`` instead of ``ubuntu-ltr`` for the
+latest release rather than LTR):
+
+.. code-block:: bash
+
+   sudo apt install gnupg software-properties-common
+   wget -qO - https://download.qgis.org/downloads/qgis-archive-keyring.gpg \
+     | sudo tee /etc/apt/trusted.gpg.d/qgis-archive-keyring.gpg
+   sudo add-apt-repository "deb https://qgis.org/ubuntu-ltr $(lsb_release -cs) main"
+   sudo apt update
+   sudo apt install qgis qgis-plugin-grass
+
+**3. If GDAL is still below 3.9** after that (check with the command
+below) — the official QGIS repo provides QGIS itself but not a newer
+GDAL, so add the `UbuntuGIS <https://launchpad.net/~ubuntugis>`_ PPA,
+the standard source most QGIS-on-Ubuntu users rely on for a current
+GDAL (despite the name, ``ubuntugis-unstable`` is the normal, well-
+established pairing with recent QGIS, not something fragile):
+
+.. code-block:: bash
+
+   sudo add-apt-repository ppa:ubuntugis/ubuntugis-unstable
+   sudo apt update
+   sudo apt upgrade
+
+**4. Verify** — both should report 3.9 or newer; the second one (run
+inside QGIS itself) is the one that actually determines whether the
+plugin works, since a system package version and what QGIS's own Python
+actually loads can differ:
+
+.. code-block:: bash
+
+   dpkg -l | grep -i gdal
+
+.. code-block:: python
+
+   # QGIS → Plugins → Python Console
+   from osgeo import gdal
+   print(gdal.__version__)
+
+For other distros (Fedora, openSUSE, Arch, …) or Flatpak/conda installs,
+package names and repo setup differ enough that there's no single
+command to give here — see `qgis.org's own installation guide
+<https://qgis.org/resources/installation-guide/>`_ for your platform,
+then check the GDAL version the same way (step 4 above).
+
 Installing the plugin
 ----------------------
 
@@ -43,26 +108,14 @@ From a ZIP file
 #. In QGIS, open **Plugins → Manage and Install Plugins → Install from ZIP**.
 #. Select the downloaded ZIP and click **Install Plugin**.
 
-Installing the ``geobridge`` library
+No extra Python packages to install
 --------------------------------------
 
-The plugin itself has almost no Python dependencies of its own — the actual
-Copernicus discovery, search, and export logic lives in the separate
-``geobridge`` PyPI package, which is **not** bundled with the plugin.
-
-After installing the plugin:
-
-#. Open it (toolbar icon or **Plugins → GeoBridge → GeoBridge**).
-#. On the **API Key** tab, click **Install dependencies**.
-#. This runs ``pip install`` against the exact Python interpreter QGIS is
-   using — not your system Python — so it always lands in the right place.
-   It installs the ``geobridge`` core package plus its optional
-   ``[zarr]`` extra (needed for GeoTIFF export and full-history time
-   series).
-#. Once the button shows **"✓ geobridge installed (…)"**, reload the
-   plugin (via the `Plugin Reloader
-   <https://plugins.qgis.org/plugins/plugin_reloader/>`_ plugin, or a full
-   QGIS restart) before using export features.
+Unlike some earlier releases, this plugin has **zero Python dependencies
+of its own** to install — discovery, search, WMTS preview, export, and
+time series all run on QGIS's own bundled GDAL directly. There is no
+"Install dependencies" step; open the plugin (toolbar icon or
+**Plugins → GeoBridge → GeoBridge**) and it's ready to use.
 
 Adding your CDS API key
 -------------------------
