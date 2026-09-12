@@ -24,70 +24,102 @@ Requirements
    If you hit that error, updating QGIS/GDAL is the fix, not anything in
    this plugin.
 
-Updating QGIS/GDAL on Linux
-------------------------------
+Installing QGIS on Linux (Ubuntu) with a matching GDAL version
+-------------------------------------------------------------------
 
 On Windows and macOS, installing a recent QGIS is usually enough on its
 own — the official installer bundles a matching GDAL. On Linux this can
-need two separate steps, because your distro's own package repos are
-often frozen at an older GDAL than what the *official QGIS* repo expects
-(confirmed in practice: Ubuntu 24.04's own repos ship GDAL 3.8.4, below
-the 3.9 threshold, even after upgrading QGIS itself to a current
-version — QGIS just links against whatever GDAL the system already has).
+take a couple of extra steps, because QGIS and GDAL can end up coming
+from two different, mismatched package sources: QGIS reports one
+version, but silently keeps using an older GDAL underneath, and nothing
+about a plain package-manager check reveals that (confirmed in practice
+on Ubuntu 24.04). Following the steps below in order avoids that.
 
-**1. Remove any existing QGIS** installed from your distro's default repo:
+**Step 1 — Open a terminal**
 
-.. code-block:: bash
+Press :kbd:`Ctrl+Alt+T`, or search for "Terminal" in your applications menu.
 
-   sudo apt remove --purge qgis qgis-common qgis-plugin-grass
-   sudo apt autoremove
+**Step 2 — Add the UbuntuGIS repository**
 
-**2. Install QGIS from the official repo** (this example targets the LTR
-line — use ``https://qgis.org/ubuntu`` instead of ``ubuntu-ltr`` for the
-latest release rather than LTR):
-
-.. code-block:: bash
-
-   sudo apt install gnupg software-properties-common
-   wget -qO - https://download.qgis.org/downloads/qgis-archive-keyring.gpg \
-     | sudo tee /etc/apt/trusted.gpg.d/qgis-archive-keyring.gpg
-   sudo add-apt-repository "deb https://qgis.org/ubuntu-ltr $(lsb_release -cs) main"
-   sudo apt update
-   sudo apt install qgis qgis-plugin-grass
-
-**3. If GDAL is still below 3.9** after that (check with the command
-below) — the official QGIS repo provides QGIS itself but not a newer
-GDAL, so add the `UbuntuGIS <https://launchpad.net/~ubuntugis>`_ PPA,
-the standard source most QGIS-on-Ubuntu users rely on for a current
-GDAL (despite the name, ``ubuntugis-unstable`` is the normal, well-
-established pairing with recent QGIS, not something fragile):
+This is a trusted, widely-used software source that keeps QGIS and GDAL
+versions matched to each other.
 
 .. code-block:: bash
 
    sudo add-apt-repository ppa:ubuntugis/ubuntugis-unstable
-   sudo apt update
-   sudo apt upgrade
 
-**4. Verify** — both should report 3.9 or newer; the second one (run
-inside QGIS itself) is the one that actually determines whether the
-plugin works, since a system package version and what QGIS's own Python
-actually loads can differ:
+Type your password when asked (nothing shows on screen as you type —
+that's normal), and press Enter to continue if prompted.
+
+**Step 3 — Refresh the list of available software**
 
 .. code-block:: bash
 
-   dpkg -l | grep -i gdal
+   sudo apt update
 
-.. code-block:: python
+**Step 4 — Check which version will actually be installed**
 
-   # QGIS → Plugins → Python Console
-   from osgeo import gdal
-   print(gdal.__version__)
+Don't assume — confirm it before committing:
+
+.. code-block:: bash
+
+   apt-cache policy qgis
+
+Look at the ``Candidate:`` line — that's the exact version you'll get,
+and the line below it shows which repository it's coming from.
+
+**Step 5 — Install QGIS**
+
+.. code-block:: bash
+
+   sudo apt install qgis
+
+Type ``y`` and press Enter if asked to confirm.
+
+**Step 6 — Confirm it actually works**
+
+Package versions can lie about what QGIS is really using, so check the
+real thing:
+
+1. Open QGIS, go to **Plugins → Python Console**, and run:
+
+   .. code-block:: python
+
+      from osgeo import gdal
+      print(gdal.__version__)
+
+   Only trust this check from *inside* QGIS — a terminal ``python3``
+   check can show a different, wrong answer.
+2. If it's below the version this plugin needs (GDAL 3.9), get proof of
+   what QGIS is really linked to:
+
+   .. code-block:: bash
+
+      ldd $(which qgis) | grep -i gdal
+
+3. Finally, actually run the plugin feature that matters to you (e.g.
+   Export to GeoTIFF on a Zarr V3 dataset — see :doc:`arco_zarr`). A
+   matching version number is a good sign, but running it for real is
+   the only true confirmation.
+
+If QGIS is already installed and something isn't working
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Instead of Step 5, do this:
+
+.. code-block:: bash
+
+   sudo apt remove --purge qgis qgis-common qgis-plugin-grass qgis-provider-grass qgis-providers python3-qgis
+   sudo apt autoremove --purge
+   sudo apt install qgis
+
+Then repeat Step 6 to confirm.
 
 For other distros (Fedora, openSUSE, Arch, …) or Flatpak/conda installs,
 package names and repo setup differ enough that there's no single
 command to give here — see `qgis.org's own installation guide
 <https://qgis.org/resources/installation-guide/>`_ for your platform,
-then check the GDAL version the same way (step 4 above).
+then check the GDAL version the same way (Step 6 above).
 
 Installing the plugin
 ----------------------
