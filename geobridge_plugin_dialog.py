@@ -540,7 +540,12 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         # standard Designer widgets. Hidden via VariableLegendWidget itself
         # until a result with WMTS + calibration data is selected.
         self.groupBox_legend = QtWidgets.QGroupBox("Legend", self.tab_search)
-        self.groupBox_legend.setGeometry(570, 10 + _SEARCH_LAYOUT_SHIFT, 540, 90)
+        # Height must clear legend_layout's margins (14 top + 10 bottom)
+        # plus VariableLegendWidget's own fixed height (72) or its tick
+        # labels get clipped by this box's fixed size, which a QVBoxLayout
+        # can't grow on its own — confirmed happening in practice even
+        # after the widget's own internal fix for the same clipping.
+        self.groupBox_legend.setGeometry(570, 10 + _SEARCH_LAYOUT_SHIFT, 540, 100)
         legend_layout = QtWidgets.QVBoxLayout(self.groupBox_legend)
         legend_layout.setContentsMargins(10, 14, 10, 10)
         self.legend_widget = VariableLegendWidget(self.groupBox_legend)
