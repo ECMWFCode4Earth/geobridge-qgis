@@ -2,7 +2,7 @@
 name=GeoBridge
 qgisMinimumVersion=3.28
 description=Discover, semantically search, and preview Copernicus climate data (ERA5, CAMS, CEMS) as WMTS layers directly in QGIS, built entirely on QGIS's own bundled GDAL.
-version=0.1.29
+version=0.1.30
 author=GeoBridge contributors
 email=iliasmachairas@outlook.com
 
@@ -16,7 +16,8 @@ repository=https://github.com/ECMWFCode4Earth/geobridge-qgis
 tracker=https://github.com/ECMWFCode4Earth/geobridge-qgis/issues
 
 hasProcessingProvider=no
-changelog=0.1.29 Search tab: fix the area-of-interest summary line ("Drawn on map — West: ... South: ... East: ... North: ...") getting its second line clipped when it wraps — its box only ever had room for one line. This is the Search tab specifically (its Area of interest section is absolute-positioned, not layout-managed, so nothing there grows on its own); confirmed the Browse by Variable tab's equivalent already auto-sizes correctly since it does use a real layout. Now sized for two lines, with everything below it on the tab shifted down to match.
+changelog=0.1.30 Search tab: fix the variable/"Dataset details" line under a selected result getting clipped when the dataset's title is long enough to wrap onto two lines itself (e.g. "CERRA sub-daily regional reanalysis data for Europe on single levels from 1984 to present") — confirmed in a Linux screenshot. Also corrects a mistake in 0.1.29's fix: it moved the right-column "Export to GeoTIFF" box in step with the left-column AOI box, which aren't related to each other — groupBox_export no longer moves for a left-column-only change.
+    0.1.29 Search tab: fix the area-of-interest summary line ("Drawn on map — West: ... South: ... East: ... North: ...") getting its second line clipped when it wraps — its box only ever had room for one line. This is the Search tab specifically (its Area of interest section is absolute-positioned, not layout-managed, so nothing there grows on its own); confirmed the Browse by Variable tab's equivalent already auto-sizes correctly since it does use a real layout. Now sized for two lines, with everything below it on the tab shifted down to match.
     0.1.28 Fix the 0.1.26 legend tick-label fix not actually showing on screen: the label box itself was sized correctly, but the surrounding "Legend" group box on the Search tab has its own separate fixed height, too short to fit the taller box — so the labels were still clipped by the group box's edge regardless. Confirmed still cropped in a fresh Linux screenshot after 0.1.26. Group box is now tall enough to fit the legend widget in full.
     0.1.27 Fix the 0.1.25 API Key tab Linux note being effectively invisible: it kept its static designer position, but this tab's other widgets get shifted up at runtime (closing the gap left by a permanently-hidden legacy banner) and the whole tab's window is deliberately kept small — between the two, the note ended up sitting right at/past the bottom edge of the visible window. It now moves up along with the rest, and the tab's window got a little taller to fit it.
     0.1.26 Search tab legend: fix the tick value labels (e.g. "254", "296") getting clipped at the bottom on Linux — this was a separate bug from 0.1.22's fix (that one was about the labels being too narrow and overlapping sideways; this one was the label box being too short and cropping the bottom of the digits under Linux's taller default font). Confirmed by a real Linux screenshot after 0.1.22 shipped.
