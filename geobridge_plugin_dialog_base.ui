@@ -88,7 +88,7 @@
 
     <widget class="QLabel" name="lbl_key_linux_note">
      <property name="geometry">
-      <rect><x>10</x><y>272</y><width>520</width><height>40</height></rect>
+      <rect><x>10</x><y>228</y><width>520</width><height>40</height></rect>
      </property>
      <property name="text">
       <string>If you're on Linux, GDAL versions can vary by distro — see the &lt;a href=&quot;https://geobridge-qgis.readthedocs.io/en/latest/installation.html#installing-qgis-on-linux-ubuntu-with-a-matching-gdal-version&quot;&gt;Linux installation guide&lt;/a&gt; in the docs.</string>

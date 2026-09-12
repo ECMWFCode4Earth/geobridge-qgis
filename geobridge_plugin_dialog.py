@@ -643,7 +643,12 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         # the title-bar close button is always visible (see _apply_tab_size).
         self._default_size = QSize(700, 700)
         self._tab_sizes = {
-            self.tab_auth: QSize(640, 360),
+            # +40 over the original 360: room for lbl_key_linux_note, added
+            # below the API key hint after _refresh_dependency_banner()'s
+            # moves — without this the note sat right at/past the bottom
+            # edge of this tab's small fixed window, invisible without a
+            # manual resize.
+            self.tab_auth: QSize(640, 400),
             # Wide enough for the two-column layout: results/AOI/time-range
             # on the left (x=10, 540 wide), Export to GeoTIFF on the right
             # (x=570, 540 wide) — see groupBox_export's geometry in the .ui.
@@ -744,6 +749,7 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         self.btn_save_key.move(10, 110)
         self.lbl_auth_status.move(120, 110)
         self.lbl_key_hint.move(10, 152)
+        self.lbl_key_linux_note.move(10, 228)
 
     # ------------------------------------------------------------------ #
     # Tab 2 — search
