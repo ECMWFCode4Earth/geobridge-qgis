@@ -1565,7 +1565,15 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
 
     def _on_browse_download_err(self):
         exc = self._browse_export_task.exception if self._browse_export_task else None
-        self.browse_tab.lbl_status.setText(f"Download failed: {exc}")
+        # The full error (and a full traceback) is always logged in full to
+        # View -> Panels -> Log Messages -> GeoBridge (see ExportTask.
+        # finished()) — this on-screen label sits in a narrow, fixed-size
+        # column and can't reliably show a long message in full, so it
+        # points there rather than risk clipping it.
+        self.browse_tab.lbl_status.setText(
+            f"Download failed: {exc}\n(see View → Panels → Log Messages → "
+            "GeoBridge for the full error)"
+        )
 
     # ------------------------------------------------------------------ #
     # Tab 2 — WMTS layer-tree management
