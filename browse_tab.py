@@ -39,7 +39,7 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
 )
 
-from . import gb_wrapper
+from . import gdal_wrapper as gb_wrapper
 from . import icons
 
 # Cascade order is only cosmetic (upstream-ish first); the grey-out maths
@@ -222,7 +222,7 @@ class BrowseTab(QWidget):
         # icon (geobridge_plugin_dialog.py's lbl_aoi_layer_info_icon).
         self.lbl_aoi_layer_info_icon = QLabel()
         self.lbl_aoi_layer_info_icon.setPixmap(icons.info_icon(16))
-        self.lbl_aoi_layer_info_icon.setToolTip(
+        self.lbl_aoi_layer_info_icon.setToolTip(icons.wrap_tooltip(
             "Using a layer sets the area of interest to that layer's "
             "rectangular bounding box — not the actual outline of its "
             "polygon(s). An irregular region (e.g. a watershed or admin "
@@ -232,7 +232,7 @@ class BrowseTab(QWidget):
             "To keep only the pixels inside the polygon, clip the "
             "exported GeoTIFF afterwards in QGIS (Raster → Extraction → "
             "Clip Raster by Mask Layer), using this layer as the mask."
-        )
+        ))
         aoi_layer_caption_row.addWidget(self.lbl_aoi_layer_info_icon)
         aoi_layer_caption_row.addStretch(1)
         aoi_layout.addLayout(aoi_layer_caption_row)
@@ -241,6 +241,16 @@ class BrowseTab(QWidget):
         aoi_layout.addWidget(self.cmb_aoi_layer)
         self.btn_use_layer_extent = QPushButton("Use extent")
         aoi_layout.addWidget(self.btn_use_layer_extent)
+
+        # Picking a layer above does NOT apply its extent by itself — this
+        # spells out the missing second step, since a bare combo+button
+        # pair next to each other otherwise reads as if selecting were
+        # enough on its own.
+        lbl_aoi_layer_hint = QLabel('Select a layer, then click "Use extent" to apply it.')
+        hint_font = lbl_aoi_layer_hint.font()
+        hint_font.setItalic(True)
+        lbl_aoi_layer_hint.setFont(hint_font)
+        aoi_layout.addWidget(lbl_aoi_layer_hint)
 
         self.rad_aoi_draw.toggled.connect(self._on_aoi_mode_changed)
         self.rad_aoi_layer.toggled.connect(self._on_aoi_mode_changed)
@@ -314,19 +324,12 @@ class BrowseTab(QWidget):
     def refresh_datasets(self):
         """(Re)populate the dataset list. Safe to call repeatedly.
 
-        Called by the dialog when the tab is shown; needs geobridge, so it
-        degrades to a hint if the library isn't installed yet.
+        Called by the dialog when the tab is shown.
         """
         if self._datasets:
             return  # already populated once
         try:
             datasets = gb_wrapper.discover_all()
-        except gb_wrapper.GeobridgeNotInstalled:
-            self.lbl_hint.setText(
-                "Install geobridge first (API Key tab) to browse datasets by variable."
-            )
-            self.list_dataset.setEnabled(False)
-            return
         except Exception as exc:  # noqa: BLE001 — surface, don't crash the tab
             self.lbl_status.setText(f"Could not list datasets: {exc}")
             return
@@ -371,9 +374,6 @@ class BrowseTab(QWidget):
             self._constraints = gb_wrapper.get_constraints(dataset_id)
             self._form_universes = gb_wrapper.form_universes(dataset_id, FIELDS)
             self._descriptor = gb_wrapper.discover_one(dataset_id)
-        except gb_wrapper.GeobridgeNotInstalled:
-            self.lbl_status.setText("Install geobridge first (API Key tab).")
-            return
         except Exception as exc:  # noqa: BLE001
             self.lbl_status.setText(f"Could not load dataset: {exc}")
             return

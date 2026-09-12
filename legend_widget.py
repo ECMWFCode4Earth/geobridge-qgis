@@ -25,6 +25,9 @@ from qgis.PyQt.QtWidgets import QWidget
 
 _MARGIN = 10
 _BAR_HEIGHT = 14
+_TICK_HEIGHT = 4
+_TICK_FRACTIONS = (0.0, 0.25, 0.5, 0.75, 1.0)
+_TICK_LABEL_WIDTH = 70
 
 # Approximate RGB stops for the palette names actually used across
 # arco_snapshot.yaml (checked against the installed geobridge: viridis and
@@ -76,7 +79,7 @@ class VariableLegendWidget(QWidget):
         super().__init__(parent)
         self._style = {}
         self._variable_label = ""
-        self.setFixedHeight(56)
+        self.setFixedHeight(64)
 
     def set_style(self, style: dict, variable_label: str = ""):
         self._style = style or {}
@@ -115,15 +118,30 @@ class VariableLegendWidget(QWidget):
         painter.setPen(QPen(self.palette().mid().color()))
         painter.drawRect(bar_rect)
 
-        painter.setPen(QPen(self.palette().text().color()))
         unit_suffix = f" {unit}" if unit else ""
-        painter.drawText(
-            QRectF(_MARGIN, bar_rect.bottom() + 2, 150, 16),
-            Qt.AlignmentFlag.AlignLeft, f"{vmin:.3g}{unit_suffix}",
-        )
-        painter.drawText(
-            QRectF(rect.width() - _MARGIN - 150, bar_rect.bottom() + 2, 150, 16),
-            Qt.AlignmentFlag.AlignRight, f"{vmax:.3g}{unit_suffix}",
-        )
+        tick_pen = QPen(self.palette().mid().color())
+        text_pen = QPen(self.palette().text().color())
+        label_top = bar_rect.bottom() + _TICK_HEIGHT + 2
+        for frac in _TICK_FRACTIONS:
+            x = bar_rect.left() + frac * bar_rect.width()
+            painter.setPen(tick_pen)
+            painter.drawLine(
+                QRectF(x, bar_rect.bottom(), 0, _TICK_HEIGHT).topLeft(),
+                QRectF(x, bar_rect.bottom(), 0, _TICK_HEIGHT).bottomLeft(),
+            )
+
+            value = vmin + frac * (vmax - vmin)
+            label = f"{value:.3g}{unit_suffix}"
+            painter.setPen(text_pen)
+            if frac <= 0.0:
+                label_rect = QRectF(x, label_top, _TICK_LABEL_WIDTH, 16)
+                align = Qt.AlignmentFlag.AlignLeft
+            elif frac >= 1.0:
+                label_rect = QRectF(x - _TICK_LABEL_WIDTH, label_top, _TICK_LABEL_WIDTH, 16)
+                align = Qt.AlignmentFlag.AlignRight
+            else:
+                label_rect = QRectF(x - _TICK_LABEL_WIDTH / 2, label_top, _TICK_LABEL_WIDTH, 16)
+                align = Qt.AlignmentFlag.AlignHCenter
+            painter.drawText(label_rect, align, label)
 
         painter.end()

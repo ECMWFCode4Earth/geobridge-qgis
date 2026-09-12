@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""Plain-Python tests for the constraint grey-out core in gb_wrapper.py.
+"""Plain-Python tests for the constraint grey-out core in gdal_wrapper.py.
 
-No QGIS and no geobridge needed: they exercise the pure function
+No QGIS needed: they exercise the pure function
 `available_values_from_constraints` against small fixtures shaped like the
 real CDS constraints captured from the live catalogue (ERA5 and UTCI).
 Run with: pytest test/test_available_values.py
@@ -9,9 +9,9 @@ Run with: pytest test/test_available_values.py
 
 import pytest
 
-from gb_wrapper import available_values_from_constraints as avail
-from gb_wrapper import field_states_from_constraints
-from gb_wrapper import field_states_from_sources
+from gdal_wrapper import available_values_from_constraints as avail
+from gdal_wrapper import field_states_from_constraints
+from gdal_wrapper import field_states_from_sources
 
 
 # --- Fixtures shaped like real fetch_constraints() output ------------------
@@ -207,22 +207,20 @@ def test_sources_empty_everywhere_is_empty():
 
 
 # --- Optional live smoke test ----------------------------------------------
-# Guarded so the offline tests above always run: this one is skipped unless
-# BOTH geobridge is importable AND GEOBRIDGE_LIVE=1 is set (it hits the
-# network). The skip is evaluated lazily, per-test, not at import time.
+# Guarded so the offline tests above always run: skipped unless
+# GEOBRIDGE_LIVE=1 is set (it hits the network — CDS's live form/
+# constraints API, via gdal_native.form, pure stdlib urllib.request, no
+# GDAL/QGIS needed for this specific call path).
 
-import importlib.util
 import os
-
-_HAVE_GEOBRIDGE = importlib.util.find_spec("geobridge") is not None
 
 
 @pytest.mark.skipif(
-    not (_HAVE_GEOBRIDGE and os.environ.get("GEOBRIDGE_LIVE")),
-    reason="needs geobridge importable and GEOBRIDGE_LIVE=1 (hits the network)",
+    not os.environ.get("GEOBRIDGE_LIVE"),
+    reason="set GEOBRIDGE_LIVE=1 to run (hits the network)",
 )
 def test_live_era5_variable_list_is_nonempty():
-    from gb_wrapper import available_values
+    from gdal_wrapper import available_values
     variables = available_values("reanalysis-era5-single-levels", "variable", {})
     assert len(variables) > 100  # ~262 at time of writing
     assert "2m_temperature" in variables

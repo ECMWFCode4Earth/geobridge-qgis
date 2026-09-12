@@ -3,17 +3,34 @@
 icons
 ~~~~~~
 
-Small QPainter-drawn icons shared across the dialog (geobridge_plugin_
-dialog.py) and the Browse tab (browse_tab.py — built in code, so it can't
-import from geobridge_plugin_dialog.py without a circular import). Drawn
-rather than shipped as image files, so the plugin's asset footprint stays
-at just icon.png and rendering is identical on every platform.
+Small QPainter-drawn icons and tooltip helpers shared across the dialog
+(geobridge_plugin_dialog.py) and the Browse tab (browse_tab.py — built in
+code, so it can't import from geobridge_plugin_dialog.py without a
+circular import). Icons are drawn rather than shipped as image files, so
+the plugin's asset footprint stays at just icon.png and rendering is
+identical on every platform.
 """
 
 from __future__ import annotations
 
+import html
+
 from qgis.PyQt.QtCore import QPointF, QRectF, Qt
 from qgis.PyQt.QtGui import QColor, QPainter, QPen, QPixmap
+
+
+def wrap_tooltip(text: str, max_width: int = 320) -> str:
+    """Force Qt to word-wrap a long plain-text tooltip into a readable
+    multi-line box instead of one unreadably wide horizontal line — plain
+    (non-rich-text) tooltips don't auto-wrap in Qt, only HTML ones do.
+    ``\\n\\n`` in `text` becomes a paragraph break, a single ``\\n`` a line
+    break.
+    """
+    paragraphs = [
+        "<br>".join(html.escape(line) for line in para.split("\n"))
+        for para in text.split("\n\n")
+    ]
+    return f'<p style="max-width:{max_width}px">' + "</p><p>".join(paragraphs) + "</p>"
 
 
 def info_icon(size: int = 16) -> QPixmap:

@@ -14,6 +14,11 @@
   <img alt="Open issues" src="https://img.shields.io/github/issues/ECMWFCode4Earth/geobridge-qgis" />
 </p>
 
+> **Disclaimer:** GeoBridge was built by the participants listed under [Authors](#-authors)
+> as a project for [ECMWF's Code for Earth](https://codeforearth.ecmwf.int/) program. It is an
+> independent community contribution — **not an official ECMWF product**, and not maintained or
+> supported by ECMWF.
+
 A QGIS 3 plugin that wraps the [geobridge](https://github.com/ECMWFCode4Earth/GeoBridge)
 Python library: enter a Copernicus CDS API key once, semantically search for a use case
 ("urban heat island", "PM2.5 exposure"), and preview the recommended dataset as a
@@ -21,6 +26,11 @@ time-stepped WMTS layer directly on the map — with a play/pause slider to scru
 
 This plugin is a thin wrapper. All discovery, semantic search, and WMTS URL logic lives in
 `geobridge`; nothing is reimplemented here.
+
+> **Note:** QGIS 3.28+ covers almost everything, but a handful of datasets use the newer Zarr V3
+> format, which needs GDAL 3.9+ (bundled with roughly **QGIS 3.38+**) to read. On an older
+> install those specific datasets fail with a "Variable not found in Zarr store" error — see
+> [Installation](https://geobridge-qgis.readthedocs.io/en/latest/installation.html) for details.
 
 <p align="center">
   <img src="docs/_static/screenshots/search_tab.png" width="700" alt="The Search tab: semantic search results, area of interest, time range, and Export to GeoTIFF with a color legend" />
@@ -126,6 +136,10 @@ builds a WMS-provider URI that QGIS cannot reliably parse against ECMWF's WMTS s
 MIT. See `LICENSE`.
 
 ## 👥 Authors
+
+Built during [ECMWF's Code for Earth](https://codeforearth.ecmwf.int/) program. This is an
+independent participant project, not an official ECMWF product, and it isn't maintained or
+supported by ECMWF.
 
 **Mentors**
 - Angel Lopez Alos

@@ -1,9 +1,16 @@
-# Documentation only. QGIS does NOT read this file automatically — nothing here
-# is auto-installed. Runtime dependencies are installed from inside the plugin
-# itself (Tab 1's "Install dependencies" button), which runs
-# `sys.executable -m pip install geobridge` into QGIS's own Python interpreter.
+# Documentation only. QGIS does NOT read this file automatically.
 #
-# Listed here purely so a human (or an external CI job testing gb_wrapper.py /
-# time_utils.py with plain pytest) knows what's needed:
-geobridge>=0.1.14
-pyyaml
+# As of the gdal-native rewrite, this plugin has ZERO pip-installed
+# runtime dependencies: it uses QGIS's own bundled GDAL (via `osgeo`,
+# already present in every QGIS install) and the Python standard library
+# only — no `geobridge`, no `xarray`/`zarr`/`dask`/`rioxarray`/`pyproj`/
+# `netcdf4`, no "Install dependencies" step at all. See gdal_native/
+# __init__.py for why (the previous geobridge[zarr]-based stack pulled in
+# a pyproj build that segfaulted QGIS, plus repeated numpy/pandas/pyarrow
+# ABI conflicts with QGIS's own bundled copies).
+#
+# Nothing to list here for the plugin itself. If an external CI job runs
+# `pytest test/` against this repo outside QGIS, that only needs `pytest`
+# — every module those tests import (gdal_wrapper.py's pure-Python
+# functions, time_utils.py, export_utils.py, etc.) is stdlib-only.
+pytest

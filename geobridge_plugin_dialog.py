@@ -4,7 +4,7 @@ geobridge_plugin_dialog
 ~~~~~~~~~~~~~~~~~~~~~~~
 
 The plugin's main (and only) dialog: a QTabWidget host with four tabs, in
-visible order: API Key, Search, Browse by Variable, Time Series.
+visible order: API Key, Search, Time Series, Browse by Variable.
 
 Tab 1 (API key): enter/save a Copernicus CDS API key (persisted via
 QSettings), plus a dependency banner + "Install dependencies" button shown
@@ -18,27 +18,25 @@ LayerDescriptor.to_qgis()) and cycles through them with a play/pause
 slider, mirroring test_temporal_dialog.py's ERA5 block. Export to GeoTIFF
 (ARCO Zarr-backed datasets only) lives in this tab too, as a group box.
 
-Tab 3 (Browse by Variable, browse_tab.py — built in code, inserted between
-Search and Time Series, not defined in the .ui): pick a dataset/variable/
-date explicitly via a cascading selection instead of free-text search,
-then preview as WMTS or download a GeoTIFF via the CDS API job queue.
-
-Tab 4 (Time Series): pick a point on the map canvas for the dataset/
+Tab 3 (Time Series): pick a point on the map canvas for the dataset/
 variable currently selected in Tab 2's search results, then fetch its
-value over time via one of two geobridge methods (radio buttons):
+value over time — one bulk read off the ARCO Zarr archive. Needs an
+authenticated CDS API key (Tab 1) and a dataset with a Zarr archive
+(picking a point is disabled otherwise); can aggregate the read down to
+a daily/weekly/monthly/annual mean/max/min instead of plotting every raw
+timestep. (A second, WMTS-GetFeatureInfo-based "Quick" method — no auth
+needed, one HTTP request per timestep — used to live here too; it's been
+removed.)
 
-- "Quick" — geobridge.point_time_series(), one WMTS GetFeatureInfo
-  request per timestep. No auth, no extra install; best for exploratory
-  ranges up to a few dozen/hundred steps.
-- "Full history" — geobridge.zarr_point_time_series(), one bulk read off
-  the ARCO Zarr archive. Needs geobridge[zarr] installed and an
-  authenticated CDS API key (Tab 1); best for long/dense ranges.
+Tab 4 (Browse by Variable, browse_tab.py — built in code, appended after
+the .ui's own tabs, not defined in the .ui itself): pick a dataset/
+variable/date explicitly via a cascading selection instead of free-text
+search, then preview as WMTS or download a GeoTIFF via the CDS API job
+queue.
 
 Clicking a new point cancels any in-flight fetch and starts a fresh one;
 results are drawn as a line plot (ts_plot_widget.py — plain QPainter, no
-matplotlib/QtChart dependency) with a "Download as CSV" button. The dialog is
-kept pinned above the QGIS main window (Qt.WindowStaysOnTopHint) so it
-stays visible while the user clicks around the map.
+matplotlib/QtChart dependency) with a "Download as CSV" button.
 """
 
 from __future__ import annotations
@@ -72,12 +70,11 @@ from qgis.gui import QgsMapToolEmitPoint, QgsMapToolExtent
 
 from . import aoi_utils
 from . import export_utils
-from . import gb_wrapper
+from . import gdal_wrapper as gb_wrapper
 from . import icons
 from . import time_utils
 from . import variable_labels
 from .browse_tab import BrowseTab
-from .dependency_installer import DependencyInstaller
 from .export_task import ExportTask
 from .legend_widget import VariableLegendWidget
 from .timeseries_task import TimeSeriesTask
@@ -93,11 +90,33 @@ SETTINGS_PATH_CDS_CREDENTIAL = "GeoBridge/cds_credential"
 SETTINGS_KEY_LAST_EXPORT_DIR = "GeoBridge/last_export_dir"
 SETTINGS_KEY_LAST_TS_CSV_DIR = "GeoBridge/last_ts_csv_dir"
 DOCS_URL = "https://geobridge-qgis.readthedocs.io/en/latest/"
+ARCO_ZARR_DOCS_URL = DOCS_URL + "arco_zarr.html"
 PLAY_INTERVAL_MS = 2000
 PREFETCH_INTERVAL_MS = 150
 DEFAULT_WINDOW_DAYS = 3
 DEFAULT_TS_WINDOW_DAYS = 30
-TS_STEP_CHOICES = (("Daily", 1), ("Weekly", 7), ("Monthly", 30))
+
+# Full history's aggregation choices — codes match gdal_native.timeseries.
+# aggregate_samples' "{period}_{stat}" naming (mirrors export_utils.
+# AGGREGATION_LABELS' convention). Weekly is meaningful here even though
+# the GeoTIFF export panel doesn't offer it: aggregation there means a
+# GDAL raster reduction over 2-D arrays per bin, but a point series is
+# already just scalars, so binning by week costs nothing extra to support.
+TS_AGGREGATION_CHOICES = (
+    ("Raw (every timestep)", "raw"),
+    ("Daily mean", "daily_mean"),
+    ("Daily max", "daily_max"),
+    ("Daily min", "daily_min"),
+    ("Weekly mean", "weekly_mean"),
+    ("Weekly max", "weekly_max"),
+    ("Weekly min", "weekly_min"),
+    ("Monthly mean", "monthly_mean"),
+    ("Monthly max", "monthly_max"),
+    ("Monthly min", "monthly_min"),
+    ("Annual mean", "annual_mean"),
+    ("Annual max", "annual_max"),
+    ("Annual min", "annual_min"),
+)
 
 # How long to wait after the *last* observed tile-request failure before
 # telling the user the batch had problems — QGIS's own tile loader keeps
@@ -216,6 +235,7 @@ def _eye_icon(crossed: bool) -> QIcon:
 
 
 _info_icon = icons.info_icon
+_wrap_tooltip = icons.wrap_tooltip
 
 
 def _rect_to_wgs84_bbox(rect, source_crs):
@@ -275,12 +295,6 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         # dialog layout didn't take on this Qt build, so we drive the
         # tabWidget's geometry directly (see resizeEvent / _fit_tab_widget).
 
-        # Keep the dialog pinned above the QGIS main window: the Time Series
-        # tab's whole workflow is "click a point on the map canvas, watch
-        # this dialog update live", which only works if the dialog can't
-        # get buried behind the main window the moment the canvas gets focus.
-        self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
-
         # Tab 2 state
         self._matches = []
         self._current_match = None
@@ -319,9 +333,6 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         self._tile_failure_deadline_timer.timeout.connect(self._report_tile_failures)
         QgsApplication.messageLog().messageReceived.connect(self._on_qgis_message_logged)
 
-        # keeps a strong reference alive while a QThread install is running
-        self._installer = None
-
         # Area-of-interest state — independent per tab (Search vs Browse):
         # drawing/selecting an AOI on one tab must never affect the other's.
         # The QgsMapToolExtent instance itself is shared/reused (only one
@@ -356,7 +367,6 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
 
         self._populate_step_combo()
         self._populate_aggregation_combo()
-        self._populate_ts_step_combo()
 
         # Info icon next to the Step dropdown clarifying it's a sampling
         # interval, not an aggregation — a common point of confusion given
@@ -367,7 +377,7 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         self.lbl_step_info_icon = QtWidgets.QLabel(self.groupBox_time_range)
         self.lbl_step_info_icon.setGeometry(250, 116, 18, 18)
         self.lbl_step_info_icon.setPixmap(_info_icon(18))
-        self.lbl_step_info_icon.setToolTip(
+        self.lbl_step_info_icon.setToolTip(_wrap_tooltip(
             "Step picks which individual timestamps to render as separate "
             "layers — it is not an aggregation. Each layer shows the value "
             "at that exact moment, not a value processed or averaged over "
@@ -375,7 +385,7 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
             "the 6 days in between are skipped, not averaged in.\n\n"
             "For an actual statistical reduction over a period (mean/max/"
             "min), use Aggregation in the Export to GeoTIFF section instead."
-        )
+        ))
 
         # Info icon in the group box's own header, top-right corner (the
         # title text "Area of interest" only occupies the left side of that
@@ -384,15 +394,32 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         # preview) never reads _search_aoi_bbox at all and always requests
         # global tiles, cropped only by whatever the QGIS canvas happens to
         # show on screen.
+        # Export to GeoTIFF (and, on the Time Series tab) both read
+        # straight off the ARCO Zarr archive — a search hit can be a
+        # CDS-API-only dataset with no Zarr backing at all, in which case
+        # btn_export_geotiff/btn_pick_point end up disabled with only a
+        # tooltip/status-line explanation to go on. This icon says so up
+        # front, regardless of which dataset happens to be selected.
+        self.lbl_export_info_icon = QtWidgets.QLabel(self.groupBox_export)
+        self.lbl_export_info_icon.setGeometry(516, 3, 16, 16)
+        self.lbl_export_info_icon.setPixmap(_info_icon(16))
+        self.lbl_export_info_icon.setToolTip(_wrap_tooltip(
+            "Only works for ARCO Zarr-backed datasets, not every dataset in "
+            "the catalogue — CDS-API-only datasets (WMTS preview but no Zarr "
+            "archive) can't be exported this way. The button below is "
+            "disabled with an explanation when the currently selected "
+            "dataset doesn't support it."
+        ))
+
         self.lbl_aoi_scope_info_icon = QtWidgets.QLabel(self.groupBox_aoi)
         self.lbl_aoi_scope_info_icon.setGeometry(516, 3, 16, 16)
         self.lbl_aoi_scope_info_icon.setPixmap(_info_icon(16))
-        self.lbl_aoi_scope_info_icon.setToolTip(
+        self.lbl_aoi_scope_info_icon.setToolTip(_wrap_tooltip(
             "This area only scopes the Export to GeoTIFF download below.\n\n"
             "It has no effect on Build layers / the WMTS preview above — "
             "that always fetches the entire globe; only what the QGIS map "
             "canvas happens to be showing looks cropped."
-        )
+        ))
 
         # Info icon next to "Use extent" clarifying that a polygon layer's
         # *rectangular bounding box* is what gets used, not the polygon's
@@ -403,7 +430,7 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         self.lbl_aoi_layer_info_icon = QtWidgets.QLabel(self.groupBox_aoi)
         self.lbl_aoi_layer_info_icon.setGeometry(521, 105, 16, 16)
         self.lbl_aoi_layer_info_icon.setPixmap(_info_icon(16))
-        self.lbl_aoi_layer_info_icon.setToolTip(
+        self.lbl_aoi_layer_info_icon.setToolTip(_wrap_tooltip(
             "Using a layer sets the area of interest to that layer's "
             "rectangular bounding box — not the actual outline of its "
             "polygon(s). An irregular region (e.g. a watershed or admin "
@@ -413,7 +440,7 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
             "To keep only the pixels inside the polygon, clip the "
             "exported GeoTIFF afterwards in QGIS (Raster → Extraction → "
             "Clip Raster by Mask Layer), using this layer as the mask."
-        )
+        ))
 
         # Custom tick marks below slider_time — see _SliderTickMarks for why
         # (QSlider's native ticks aren't stylable). slider_time's own height
@@ -430,7 +457,6 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
 
         # --- signals — Tab 1 ---
         self.btn_save_key.clicked.connect(self._on_save_key_clicked)
-        self.btn_install_core.clicked.connect(self._on_install_core_clicked)
 
         # Eye icon inside the API key field to toggle Password/Normal echo
         # mode — inline QLineEdit action rather than a separate button, so
@@ -472,15 +498,43 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         self.btn_browse_output.clicked.connect(self._on_browse_output_clicked)
         self.btn_export_geotiff.clicked.connect(self._on_export_clicked)
 
+        # ARCO Zarr note — above the search bar, so it's visible before the
+        # user ever searches rather than only discovered later via the
+        # Export section's own info icon/disabled-state message. Built in
+        # code (not the .ui) since the .ui's absolute layout has no spare
+        # row for it; every other Tab 2 widget is shifted down by
+        # _SEARCH_LAYOUT_SHIFT to make room.
+        self.lbl_search_zarr_note = QtWidgets.QLabel(self.tab_search)
+        self.lbl_search_zarr_note.setGeometry(10, 10, 540, 30)
+        self.lbl_search_zarr_note.setWordWrap(True)
+        self.lbl_search_zarr_note.setOpenExternalLinks(True)
+        self.lbl_search_zarr_note.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        self.lbl_search_zarr_note.setText(
+            "The functionalities of this tab are only about ARCO Zarr "
+            f'products — <a href="{ARCO_ZARR_DOCS_URL}">see more</a>.'
+        )
+        _search_note_font = QFont(self.lbl_search_zarr_note.font())
+        _search_note_font.setItalic(True)
+        self.lbl_search_zarr_note.setFont(_search_note_font)
+
+        _SEARCH_LAYOUT_SHIFT = 34
+        for _name in (
+            "txt_query", "btn_search", "list_results", "lbl_search_selection",
+            "groupBox_aoi", "groupBox_time_range", "groupBox_export",
+        ):
+            _w = getattr(self, _name)
+            _w.move(_w.x(), _w.y() + _SEARCH_LAYOUT_SHIFT)
+
         # Legend for the WMTS preview's color scale — right column, upper
-        # part (above Export to GeoTIFF, which starts at y=120 in the .ui —
-        # the legend is relevant the moment a result is selected, before
-        # export settings even matter). Built in code, not the .ui, since
-        # it hosts a custom-painted widget rather than standard Designer
-        # widgets. Hidden via VariableLegendWidget itself until a result
-        # with WMTS + calibration data is selected.
+        # part (above Export to GeoTIFF, which starts at y=120 in the .ui,
+        # now shifted to 120 + _SEARCH_LAYOUT_SHIFT like everything else on
+        # this tab — the legend is relevant the moment a result is
+        # selected, before export settings even matter). Built in code, not
+        # the .ui, since it hosts a custom-painted widget rather than
+        # standard Designer widgets. Hidden via VariableLegendWidget itself
+        # until a result with WMTS + calibration data is selected.
         self.groupBox_legend = QtWidgets.QGroupBox("Legend", self.tab_search)
-        self.groupBox_legend.setGeometry(570, 10, 540, 90)
+        self.groupBox_legend.setGeometry(570, 10 + _SEARCH_LAYOUT_SHIFT, 540, 90)
         legend_layout = QtWidgets.QVBoxLayout(self.groupBox_legend)
         legend_layout.setContentsMargins(10, 14, 10, 10)
         self.legend_widget = VariableLegendWidget(self.groupBox_legend)
@@ -491,8 +545,23 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         self.btn_pick_point.toggled.connect(self._on_pick_point_toggled)
         self.btn_ts_refresh.clicked.connect(self._on_ts_refresh_clicked)
         self.btn_ts_download_csv.clicked.connect(self._on_ts_download_csv_clicked)
-        self.rad_ts_quick.toggled.connect(self._on_ts_method_changed)
-        self.rad_ts_zarr.toggled.connect(self._on_ts_method_changed)
+
+        # ARCO Zarr note — at the very top of the tab, above the "Selected
+        # dataset" line, so it's visible immediately. Pushes everything
+        # else on the tab down by _TS_NOTE_SHIFT.
+        _TS_NOTE_SHIFT = 34
+        self.lbl_ts_zarr_note = QtWidgets.QLabel(self.tab_timeseries)
+        self.lbl_ts_zarr_note.setGeometry(10, 8, 520, 30)
+        self.lbl_ts_zarr_note.setWordWrap(True)
+        self.lbl_ts_zarr_note.setOpenExternalLinks(True)
+        self.lbl_ts_zarr_note.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        self.lbl_ts_zarr_note.setText(
+            "The functionalities of this tab are only about ARCO Zarr "
+            f'products — <a href="{ARCO_ZARR_DOCS_URL}">see more</a>.'
+        )
+        _ts_note_font = QFont(self.lbl_ts_zarr_note.font())
+        _ts_note_font.setItalic(True)
+        self.lbl_ts_zarr_note.setFont(_ts_note_font)
 
         # Two-line "Selected dataset: <title>" / "variable <code> (<friendly
         # name>)" block, plus a hoverable info icon clarifying that this tab
@@ -501,37 +570,54 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         # since the .ui's absolute layout has no spare row for it; the rest
         # of the tab is shifted down by _TS_LAYOUT_SHIFT to make room.
         self.lbl_ts_selected = QtWidgets.QLabel(self.tab_timeseries)
-        self.lbl_ts_selected.setGeometry(10, 8, 470, 40)
+        self.lbl_ts_selected.setGeometry(10, 8 + _TS_NOTE_SHIFT, 470, 40)
         self.lbl_ts_selected.setTextFormat(Qt.TextFormat.RichText)
         self.lbl_ts_selected.setWordWrap(True)  # matches lbl_search_selection
 
         self.lbl_ts_info_icon = QtWidgets.QLabel(self.tab_timeseries)
-        self.lbl_ts_info_icon.setGeometry(484, 10, 16, 16)
+        self.lbl_ts_info_icon.setGeometry(484, 10 + _TS_NOTE_SHIFT, 16, 16)
         self.lbl_ts_info_icon.setPixmap(_info_icon())
-        self.lbl_ts_info_icon.setToolTip(
+        self.lbl_ts_info_icon.setToolTip(_wrap_tooltip(
             "This tab has no dataset picker of its own — it always uses "
             "whatever dataset/variable is currently selected on the Search tab."
-        )
+        ))
 
-        _TS_LAYOUT_SHIFT = 44
-        self.lbl_ts_hint.setGeometry(10, 52, 520, 34)
+        # 10, not 44: the removed Method row used to occupy the extra 34px
+        # between here and btn_pick_point below - closing that gap now
+        # that there's nothing left to show there.
+        _TS_LAYOUT_SHIFT = 10 + _TS_NOTE_SHIFT
+        self.lbl_ts_hint.setGeometry(10, 52 + _TS_NOTE_SHIFT, 520, 34)
         for _name in (
-            "lbl_ts_method", "rad_ts_quick", "rad_ts_zarr", "btn_pick_point",
+            "btn_pick_point",
             "lbl_ts_coords", "lbl_ts_start", "dt_ts_start", "lbl_ts_end", "dt_ts_end",
-            "lbl_ts_step", "cmb_ts_step", "btn_ts_refresh",
+            "btn_ts_refresh",
             "progress_ts", "lbl_ts_status", "plot_ts_container", "btn_ts_download_csv",
         ):
             _w = getattr(self, _name)
             _w.move(_w.x(), _w.y() + _TS_LAYOUT_SHIFT)
 
-        # --- Browse by Variable — built in code, not the .ui. Inserted at
-        # index 2 (between Search and Time Series) rather than appended, so
-        # the visible tab order is API Key, Search, Browse by Variable,
-        # Time Series. Everything downstream (_tab_sizes, _apply_tab_size)
-        # keys off the widget itself rather than a hardcoded index, so this
-        # doesn't need any other change.
+        # Reads the whole native-resolution series in one go, so it can
+        # cheaply reduce it to a daily/weekly/monthly/annual mean/max/min
+        # instead of plotting every raw timestep — same row Step used to
+        # occupy back when "Quick" (WMTS GetFeatureInfo, no aggregation)
+        # was still an option here.
+        self.lbl_ts_agg = QtWidgets.QLabel(self.tab_timeseries)
+        self.lbl_ts_agg.setGeometry(10, 160 + _TS_LAYOUT_SHIFT, 60, 24)
+        self.lbl_ts_agg.setText("Aggregation:")
+
+        self.cmb_ts_agg = QtWidgets.QComboBox(self.tab_timeseries)
+        self.cmb_ts_agg.setGeometry(80, 158 + _TS_LAYOUT_SHIFT, 150, 26)
+        for _label, _code in TS_AGGREGATION_CHOICES:
+            self.cmb_ts_agg.addItem(_label, _code)
+
+        # --- Browse by Variable — built in code, not the .ui. Appended
+        # after the .ui's own tabs (API Key, Search, Time Series) rather
+        # than inserted between them, so the visible tab order is API Key,
+        # Search, Time Series, Browse by Variable. Everything downstream
+        # (_tab_sizes, _apply_tab_size) keys off the widget itself rather
+        # than a hardcoded index, so this doesn't need any other change.
         self.browse_tab = BrowseTab(self)
-        self.tabWidget.insertTab(2, self.browse_tab, "Browse by Variable")
+        self.tabWidget.addTab(self.browse_tab, "Browse by Variable")
         self.browse_tab.downloadRequested.connect(self._on_browse_download)
         # The Browse tab's AOI widgets mirror the Search tab's layout, but
         # each tab keeps its own independent bbox — see _on_draw_aoi_clicked.
@@ -552,8 +638,16 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
             # Wide enough for the two-column layout: results/AOI/time-range
             # on the left (x=10, 540 wide), Export to GeoTIFF on the right
             # (x=570, 540 wide) — see groupBox_export's geometry in the .ui.
-            self.tab_search: QSize(1140, 760),
-            self.tab_timeseries: QSize(720, 700),
+            # +34 over the .ui's own bottom edge: the ARCO Zarr note above
+            # the search bar (_SEARCH_LAYOUT_SHIFT) pushes every widget on
+            # this tab down by that much, including Build layers' play
+            # button at the bottom of groupBox_time_range. The extra +40 on
+            # top of that is just breathing room so the play button/slider
+            # row isn't sitting flush against the window's bottom edge.
+            self.tab_search: QSize(1140, 760 + 34 + 40),
+            # Matches the size the user had it resized to by hand (measured
+            # live via the window's client-area rect: 791x928).
+            self.tab_timeseries: QSize(791, 928),
             self.browse_tab: QSize(1040, 780),
         }
         self.tabWidget.currentChanged.connect(self._on_tab_changed)
@@ -579,9 +673,8 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         self._load_saved_key()
         self._refresh_dependency_banner()
         self._refresh_aoi_layer_combo()
-        self._on_ts_method_changed()
-        if gb_wrapper.is_core_available():
-            self.browse_tab.refresh_datasets()
+        self._refresh_ts_hint()
+        self.browse_tab.refresh_datasets()
 
     # ------------------------------------------------------------------ #
     # Tab 1 — API key
@@ -590,12 +683,10 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
     def _load_saved_key(self):
         key = QSettings().value(SETTINGS_PATH_CDS_CREDENTIAL, "", type=str)
         self.txt_api_key.setText(key)
-        if key and gb_wrapper.is_core_available():
+        if key:
             try:
                 gb_wrapper.authenticate(key)
                 self.lbl_auth_status.setText("Authenticated (saved key).")
-            except gb_wrapper.GeobridgeNotInstalled:
-                pass
             except Exception as exc:
                 self.lbl_auth_status.setText(f"Saved key failed to authenticate: {exc}")
 
@@ -605,10 +696,8 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         try:
             gb_wrapper.authenticate(key)
             self.lbl_auth_status.setText("Authenticated.")
-        except gb_wrapper.GeobridgeNotInstalled:
-            self.lbl_auth_status.setText("geobridge is not installed yet — see above.")
         except Exception as exc:
-            # geobridge.AuthenticationError, or any other geobridge exception
+            # gdal_native.auth.AuthenticationError, or any other auth exception
             self.lbl_auth_status.setText(f"Authentication failed: {exc}")
 
     def _on_toggle_key_visibility(self):
@@ -622,127 +711,30 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         self._key_visibility_action.setIcon(_eye_icon(crossed=self._key_visible))
 
     # ------------------------------------------------------------------ #
-    # Dependency install (core tier)
+    # Dependency banner — permanently hidden.
+    #
+    # gdal_native is vendored into this plugin (GDAL comes from QGIS's own
+    # bundled `osgeo`, everything else is stdlib) — there is no separate
+    # package to install, so the "Install dependencies" button/banner this
+    # tab used to show for geobridge no longer has anything to do. The
+    # widgets stay defined in the .ui file rather than being removed
+    # there, so this just keeps both permanently hidden.
+    #
+    # Positions below are exactly the original "fully installed" layout
+    # (previously reached once geobridge+zarr were detected, now just the
+    # permanent state) — reusing already-verified coordinates rather than
+    # guessing new tighter ones now that the button never shows at all.
     # ------------------------------------------------------------------ #
 
     def _refresh_dependency_banner(self):
-        core_ok = gb_wrapper.is_core_available()
-        zarr_ok = gb_wrapper.is_zarr_extra_available()
-        fully_installed = core_ok and zarr_ok
+        self.btn_install_core.setVisible(False)
+        self.lbl_dep_banner.setVisible(False)
 
-        # The button always stays visible — it either invites installation
-        # or confirms it already happened, so it never looks like it just
-        # vanished after a successful install.
-        self.btn_install_core.setVisible(True)
-        if fully_installed:
-            version = gb_wrapper.geobridge_version()
-            label = f"✓ geobridge installed ({version})" if version else "✓ geobridge installed"
-            self.btn_install_core.setText(label)
-            self.btn_install_core.setEnabled(False)
-            self.lbl_dep_banner.setVisible(False)
-        else:
-            self.btn_install_core.setText("Install dependencies")
-            self.btn_install_core.setEnabled(True)
-            if core_ok and not zarr_ok:
-                self.lbl_dep_banner.setText(
-                    "geobridge is installed, but export support (geobridge[zarr]) is "
-                    "missing. Install it to enable Export to GeoTIFF."
-                )
-            else:
-                self.lbl_dep_banner.setText(
-                    "geobridge is not installed yet. Install it to enable authentication, "
-                    "search, and export."
-                )
-            self.lbl_dep_banner.setVisible(True)
-
-        # Absolute-positioned tab: when the banner is hidden (fully
-        # installed), lift the install button and the key-entry widgets up so
-        # the Save button isn't pushed low by the now-empty banner slot.
-        if fully_installed:
-            self.btn_install_core.move(10, 10)
-            lift = 44
-        else:
-            self.btn_install_core.move(10, 52)
-            lift = 0
-        self.lbl_key_title.move(10, 96 - lift)
-        self.txt_api_key.move(10, 118 - lift)
-        self.btn_save_key.move(10, 154 - lift)
-        self.lbl_auth_status.move(120, 154 - lift)
-        self.lbl_key_hint.move(10, 196 - lift)
-
-        # Search/auth only need the base package — don't block them on the
-        # heavier zarr extra being present too.
-        for widget in (self.txt_api_key, self.btn_save_key, self.txt_query, self.btn_search):
-            widget.setEnabled(core_ok)
-
-    def _on_install_core_clicked(self):
-        self.btn_install_core.setEnabled(False)
-        self.btn_install_core.setText("Installing…")
-        # Installs the [zarr] extra too (xarray/rasterio/zarr/rioxarray/fsspec/dask) —
-        # needed for Export to GeoTIFF, not just the pyyaml-only core.
-        #
-        # aiohttp/requests are added explicitly here because the currently
-        # published geobridge[zarr] on PyPI declares plain "fsspec" rather
-        # than "fsspec[http]", so fsspec's HTTPFileSystem (used to open the
-        # ARCO Zarr stores over https://) is otherwise missing them — fixed
-        # at the source for the next geobridge release, but this install
-        # needs to work against what's on PyPI today.
-        #
-        # netcdf4 is added explicitly too: gb.cds_to_geotiff() (the CDS API
-        # download path used for datasets not yet in the ARCO Zarr lake,
-        # e.g. ERA5-Land via the Browse tab) reads the NetCDF file CDS
-        # returns via this package, but it isn't part of geobridge[zarr]
-        # itself (that extra only covers the ARCO/Zarr read path).
-        self._installer = DependencyInstaller(
-            # >=0.1.14: LayerDescriptor.cds_download_supported, which
-            # browse_tab._update_selection_state() gates the Download button
-            # on — datasets CDS validation hasn't confirmed working yet.
-            #
-            # numpy/pandas are pinned to the major.minor QGIS itself ships
-            # (checked directly in a QGIS 3.40.8 install's own site-packages:
-            # numpy 1.26.4, pandas 2.2.2) — `--upgrade` would otherwise
-            # happily replace QGIS's own working copies with whatever newer
-            # version geobridge[zarr]'s dependency tree (xarray/zarr/dask)
-            # is willing to accept. If a future geobridge release needs
-            # newer versions than these ranges allow, pip will fail loudly
-            # with a resolver error here instead of installing a silently-
-            # mismatched stack — re-check QGIS's bundled versions and widen
-            # the ranges when that happens, rather than dropping the pins.
-            #
-            # No pyarrow pin: confirmed by reading geobridge's own
-            # pyproject.toml that nothing in its dependency tree (base,
-            # [zarr], or [full]) requires pyarrow at all — QGIS's bundled
-            # copy (from geopandas, unrelated to this plugin) is never
-            # touched by this install, so there's nothing to protect here.
-            [
-                "geobridge[zarr]>=0.1.14",
-                "numpy>=1.26,<2",
-                "pandas>=2.2,<3",
-                "aiohttp",
-                "requests",
-                "netcdf4",
-            ]
-        )
-        self._installer.finished_ok.connect(self._on_core_install_done)
-        self._installer.finished_err.connect(self._on_core_install_failed)
-        self._installer.start()
-
-    def _on_core_install_done(self, log_text):
-        QMessageBox.information(
-            self,
-            "GeoBridge",
-            "geobridge (with export support) installed successfully.\n\n"
-            "This pulls in GDAL/rasterio-adjacent packages alongside QGIS's own — "
-            "please fully restart QGIS (not just Plugin Reloader) before using "
-            "Export to GeoTIFF, to avoid native-library conflicts. A Plugin Reloader "
-            "reload is enough for authentication and search.",
-        )
-        self._refresh_dependency_banner()
-
-    def _on_core_install_failed(self, log_text):
-        self.btn_install_core.setText("Install dependencies")
-        self.btn_install_core.setEnabled(True)
-        QMessageBox.critical(self, "GeoBridge", f"Install failed:\n\n{log_text}")
+        self.lbl_key_title.move(10, 52)
+        self.txt_api_key.move(10, 74)
+        self.btn_save_key.move(10, 110)
+        self.lbl_auth_status.move(120, 110)
+        self.lbl_key_hint.move(10, 152)
 
     # ------------------------------------------------------------------ #
     # Tab 2 — search
@@ -776,20 +768,12 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
                 )
                 self.cmb_aggregation.setItemData(i, bold_font, Qt.ItemDataRole.FontRole)
 
-    def _populate_ts_step_combo(self):
-        self.cmb_ts_step.clear()
-        for label, step_days in TS_STEP_CHOICES:
-            self.cmb_ts_step.addItem(label, step_days)
-
     def _on_search_clicked(self):
         query = self.txt_query.text().strip()
         if not query:
             return
         try:
             matches = gb_wrapper.semantic_resources(query, max_results=15)
-        except gb_wrapper.GeobridgeNotInstalled:
-            QMessageBox.warning(self, "GeoBridge", "Install geobridge first (API Key tab).")
-            return
         except Exception as exc:
             QMessageBox.warning(self, "GeoBridge", f"Search failed: {exc}")
             return
@@ -825,10 +809,7 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         # semantic_search() comes from TF-IDF catalog matches with no
         # curated use case at all); resolve to labels once per search
         # rather than per row, and fall back to "—" when there isn't one.
-        try:
-            uc_labels = gb_wrapper.use_case_labels()
-        except gb_wrapper.GeobridgeNotInstalled:
-            uc_labels = {}
+        uc_labels = gb_wrapper.use_case_labels()
 
         self.list_results.setRowCount(len(matches))
         for row, m in enumerate(matches):
@@ -836,7 +817,29 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
                 ", ".join(uc_labels.get(uc, uc) for uc in m.use_cases) if m.use_cases else "—"
             )
             self.list_results.setItem(row, 0, QtWidgets.QTableWidgetItem(f"{m.confidence:.2f}"))
-            self.list_results.setItem(row, 1, QtWidgets.QTableWidgetItem(use_case_text))
+            use_case_item = QtWidgets.QTableWidgetItem(use_case_text)
+            if m.use_cases:
+                # Only the first curated use case's recipe — a pair rarely
+                # matches more than one, and the cell only has room for
+                # one tooltip anyway.
+                detail = gb_wrapper.use_case_detail(m.use_cases[0])
+                if detail:
+                    tooltip_lines = [detail.get("label", "")]
+                    if detail.get("typical_question"):
+                        tooltip_lines.append(detail["typical_question"])
+                    recipe = ", ".join(
+                        f"{label}: {detail[key]}"
+                        for label, key in (
+                            ("access", "recommended_access"),
+                            ("aggregation", "recommended_aggregation"),
+                            ("style", "recommended_style"),
+                        )
+                        if detail.get(key)
+                    )
+                    if recipe:
+                        tooltip_lines.append(recipe)
+                    use_case_item.setToolTip(_wrap_tooltip("\n\n".join(tooltip_lines)))
+            self.list_results.setItem(row, 1, use_case_item)
             self.list_results.setItem(row, 2, QtWidgets.QTableWidgetItem(m.dataset_id))
             # Hovering the short variable code shows its readable name.
             var_item = QtWidgets.QTableWidgetItem(m.variable)
@@ -856,7 +859,7 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
 
         try:
             descriptor = gb_wrapper.discover_one(match.dataset_id)
-        except gb_wrapper.GeobridgeNotInstalled:
+        except Exception:
             descriptor = None
         self._current_descriptor = descriptor
 
@@ -881,15 +884,22 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
 
         has_zarr = bool(descriptor and getattr(descriptor, "has_zarr", False))
 
-        # "Full history" on the Time Series tab (Tab 4) is a bulk ARCO Zarr
-        # read (gb_wrapper.zarr_point_time_series) — only meaningful for
-        # datasets that actually have a Zarr archive. Force back to "Quick"
-        # if the newly selected dataset doesn't support it and Full history
-        # was still checked, rather than leaving a disabled-but-checked
-        # radio.
-        self.rad_ts_zarr.setEnabled(has_zarr)
-        if not has_zarr and self.rad_ts_zarr.isChecked():
-            self.rad_ts_quick.setChecked(True)
+        # The Time Series tab (Tab 3) is a bulk ARCO Zarr read
+        # (gb_wrapper.zarr_point_time_series) — only meaningful for
+        # datasets that actually have a Zarr archive. Disable picking a
+        # point at all for one that doesn't, rather than letting the user
+        # start a fetch that can only fail; _refresh_ts_hint() explains why.
+        self.btn_pick_point.setEnabled(has_zarr)
+
+        # Reset Full history's Aggregation back to Raw on every new Search
+        # selection: it's easy to leave it on e.g. "Monthly mean" after
+        # trying it on one dataset, then be confused when a completely
+        # different dataset's fetch comes back as "Done: 1 point(s)" for
+        # no apparent reason - a 30-day default range collapses to a
+        # single bucket under Monthly/Annual. Aggregation should be a
+        # deliberate per-fetch choice, not something that silently
+        # survives a dataset switch.
+        self.cmb_ts_agg.setCurrentIndex(0)
 
         self.groupBox_export.setVisible(bool(descriptor))
         self.btn_export_geotiff.setEnabled(has_zarr)
@@ -1132,6 +1142,8 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         label = match.variable
         if variable_labels.has_label(match.variable):
             label += f" ({variable_labels.friendly_name(match.variable)})"
+        if style.get("dimensionless"):
+            label += " (dimensionless)"
         self.legend_widget.set_style(style, variable_label=label)
 
     def _update_time_extent(self, match, has_wmts):
@@ -1152,7 +1164,7 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
 
     # ------------------------------------------------------------------ #
     # Area of interest — shared "draw on map" tool, independent bboxes per
-    # tab (Search / Tab 2 and Browse by Variable / Tab 3)
+    # tab (Search / Tab 2 and Browse by Variable / Tab 4)
     # ------------------------------------------------------------------ #
 
     def _refresh_aoi_layer_combo(self):
@@ -1413,16 +1425,6 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         variable = payload["variable"]
         request = dict(payload["request"])
 
-        if not gb_wrapper.is_core_available():
-            QMessageBox.warning(self, "GeoBridge", "Install geobridge first (API Key tab).")
-            return
-        if not gb_wrapper.is_zarr_extra_available():
-            QMessageBox.warning(
-                self, "GeoBridge",
-                "Download needs the export dependencies — use \"Install "
-                "dependencies\" on the API Key tab first.",
-            )
-            return
         if not gb_wrapper.is_authenticated():
             QMessageBox.warning(
                 self, "GeoBridge",
@@ -1716,7 +1718,10 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
 
         self.btn_export_geotiff.setEnabled(False)
         self.lbl_export_status.setText("Exporting…")
-        self.progress_export.setValue(0)
+        # Indeterminate "busy" mode: ExportTask has no mid-flight progress
+        # to report (see its docstring) — same as the Time Series tab's
+        # "Full history" busy indicator, for the same reason.
+        self.progress_export.setRange(0, 0)
         self.progress_export.setVisible(True)
 
         self._export_task = ExportTask(
@@ -1731,17 +1736,19 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         QgsApplication.taskManager().addTask(self._export_task)
 
     def _on_export_progress(self, progress: float):
-        self.progress_export.setValue(int(progress))
+        pass  # no mid-flight progress to report — see ExportTask's docstring
 
     def _on_export_finished_ok(self):
         self.btn_export_geotiff.setEnabled(True)
         self.progress_export.setVisible(False)
+        self.progress_export.setRange(0, 100)
         path = self._export_task.result_path if self._export_task else None
         self.lbl_export_status.setText(f"Done: {path}")
 
     def _on_export_finished_err(self):
         self.btn_export_geotiff.setEnabled(True)
         self.progress_export.setVisible(False)
+        self.progress_export.setRange(0, 100)
         exc = self._export_task.exception if self._export_task else None
         self.lbl_export_status.setText(f"Export failed: {exc}")
 
@@ -1749,28 +1756,12 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
     # Tab 3 — point time series
     # ------------------------------------------------------------------ #
 
-    def _ts_method(self) -> str:
-        """'zarr' or 'quick', from the Time Series tab's method radios."""
-        return "zarr" if self.rad_ts_zarr.isChecked() else "quick"
-
-    def _on_ts_method_changed(self, checked: bool = True):
-        # Each radio's toggled() fires twice per switch (once for the
-        # button losing the check, once for the one gaining it) — only
-        # react to the "gained" half, and once at __init__ time via the
-        # default checked=True.
-        if not checked:
-            return
-        is_zarr = self._ts_method() == "zarr"
-        # geo_chunked/time_chunked archive reads come back at the
-        # dataset's native time resolution — there's no per-step loop to
-        # thin out, unlike the WMTS method.
-        self.lbl_ts_step.setEnabled(not is_zarr)
-        self.cmb_ts_step.setEnabled(not is_zarr)
-        self._refresh_ts_hint()
-
     def _refresh_ts_hint(self):
         if self._current_match is None:
-            self.lbl_ts_selected.setText("")
+            # Otherwise this is just blank space above the hint line below
+            # it, with nothing telling you why — before any Search tab
+            # selection exists, this row has nothing to show yet.
+            self.lbl_ts_selected.setText("Select the dataset on the Search tab first.")
             self.lbl_ts_info_icon.setVisible(False)
             self.lbl_ts_hint.setText(
                 'Pick a dataset/variable in the Search tab first, then click '
@@ -1792,12 +1783,11 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         )
         self.lbl_ts_info_icon.setVisible(True)
 
-        note = (
-            "Full history needs geobridge[zarr] installed and an authenticated "
-            "CDS API key (API Key tab)."
-            if self._ts_method() == "zarr" else
-            "Quick mode works without auth; keep ranges to a few dozen/hundred steps."
-        )
+        has_zarr = bool(self._current_descriptor and getattr(self._current_descriptor, "has_zarr", False))
+        if not has_zarr:
+            note = "This dataset has no ARCO Zarr archive — pick a different dataset/variable on the Search tab."
+        else:
+            note = "Needs an authenticated CDS API key (API Key tab)."
         self.lbl_ts_hint.setText(
             'Click "Pick point on map" then click anywhere on the map canvas. ' + note
         )
@@ -1828,10 +1818,16 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
             self._ts_tool.deactivated.connect(self._on_ts_tool_deactivated)
         self._ts_previous_map_tool = canvas.mapTool()
         canvas.setMapTool(self._ts_tool)
+        # This dialog isn't kept on top of QGIS any more (see git history —
+        # it used to be, and that fought with other applications too), so
+        # without this the QGIS main window can sit behind the dialog and
+        # a click meant for the map canvas hits the dialog instead. Bring
+        # QGIS to the front so the canvas is immediately clickable.
+        self.iface.mainWindow().raise_()
+        self.iface.mainWindow().activateWindow()
         self.iface.messageBar().pushInfo(
             "GeoBridge",
-            "Click anywhere on the map to sample its time series. "
-            "Click again elsewhere to update it.",
+            "Click anywhere on the map to sample its time series.",
         )
 
     def _on_ts_tool_deactivated(self):
@@ -1848,6 +1844,19 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         self._ts_point = (point.x(), point.y())
         self.lbl_ts_coords.setText(f"Lon: {point.x():.4f}   Lat: {point.y():.4f}")
         self.btn_ts_refresh.setEnabled(True)
+        # One-shot pick: deactivate the crosshair tool and restore whatever
+        # tool was active before (typically Pan, whose cursor is the open
+        # hand) rather than leaving the crosshair up for another click —
+        # this also restores the button's unchecked state via
+        # _on_pick_point_toggled(False). Use "Refresh" or click "Pick
+        # point on map" again to sample a different point.
+        self.btn_pick_point.setChecked(False)
+        # The click just now activated QGIS's main window (see
+        # _on_pick_point_toggled's raise_()), so bring this dialog back to
+        # the front too — otherwise the fetch that's about to start (and
+        # its result) happens behind QGIS, out of sight.
+        self.raise_()
+        self.activateWindow()
         self._start_ts_fetch()
 
     def _on_ts_refresh_clicked(self):
@@ -1863,6 +1872,14 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
             QMessageBox.warning(self, "GeoBridge", "End must be after start.")
             return
 
+        if not gb_wrapper.is_authenticated():
+            QMessageBox.warning(
+                self, "GeoBridge",
+                "Full history needs an authenticated CDS API key — save "
+                "one on the API Key tab first.",
+            )
+            return
+
         # Cancelling is non-blocking (it just flags the task); any results
         # it still emits after this point are discarded by the sender()
         # checks in the _on_ts_* slots below, since self._ts_task will
@@ -1872,23 +1889,6 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         # later click reaches this line, and calling .cancel() on it raises
         # "wrapped C/C++ object ... has been deleted" instead of just
         # being a safe no-op.
-        method = self._ts_method()
-        if method == "zarr":
-            if not (gb_wrapper.is_core_available() and gb_wrapper.is_zarr_extra_available()):
-                QMessageBox.warning(
-                    self, "GeoBridge",
-                    "Full history needs geobridge[zarr] installed — use the "
-                    "\"Install dependencies\" button on the API Key tab.",
-                )
-                return
-            if not gb_wrapper.is_authenticated():
-                QMessageBox.warning(
-                    self, "GeoBridge",
-                    "Full history needs an authenticated CDS API key — save "
-                    "one on the API Key tab first.",
-                )
-                return
-
         if self._ts_task is not None:
             try:
                 self._ts_task.cancel()
@@ -1900,13 +1900,9 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         self.btn_ts_download_csv.setEnabled(False)
         self.plot_ts.set_samples([])
         self.lbl_ts_status.setText("Fetching…")
-        if method == "zarr":
-            # One bulk read, not a per-step loop — nothing to report
-            # incremental progress on, so show a busy indicator instead.
-            self.progress_ts.setRange(0, 0)
-        else:
-            self.progress_ts.setRange(0, 100)
-            self.progress_ts.setValue(0)
+        # One bulk read, not a per-step loop — nothing to report
+        # incremental progress on, so show a busy indicator instead.
+        self.progress_ts.setRange(0, 0)
         self.progress_ts.setVisible(True)
 
         params = {
@@ -1916,25 +1912,20 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
             "lat": lat,
             "start": start,
             "end": end,
+            "chunking": None,
+            "aggregation": self.cmb_ts_agg.currentData(),
         }
-        if method == "zarr":
-            params["chunking"] = None
-        else:
-            params["step_days"] = self.cmb_ts_step.currentData()
 
         self._ts_task = TimeSeriesTask(
-            f"GeoBridge: time series at ({lon:.3f}, {lat:.3f})", method, params
+            f"GeoBridge: time series at ({lon:.3f}, {lat:.3f})", params
         )
-        self._ts_task.progressChanged.connect(self._on_ts_progress)
+        # No progressChanged hookup: it's one bulk read, not a per-step
+        # loop with anything to report — that's why progress_ts is left
+        # in indeterminate/"busy" mode (setRange(0, 0) above) rather than
+        # a real percentage.
         self._ts_task.taskCompleted.connect(self._on_ts_finished_ok)
         self._ts_task.taskTerminated.connect(self._on_ts_finished_err)
         QgsApplication.taskManager().addTask(self._ts_task)
-
-    def _on_ts_progress(self, progress: float):
-        if self.sender() is not self._ts_task:
-            return  # stale signal from a task superseded by a newer click
-        if self.progress_ts.maximum() > 0:  # ignore for the zarr busy indicator
-            self.progress_ts.setValue(int(progress))
 
     def _on_ts_finished_ok(self):
         if self.sender() is not self._ts_task:
@@ -2073,11 +2064,32 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
 
     def showEvent(self, event):
         super(GeoBridgePluginDialog, self).showEvent(event)
+        self._position_near_top_left()
         self._refresh_dependency_banner()
         self._refresh_aoi_layer_combo()
-        if gb_wrapper.is_core_available():
-            self.browse_tab.refresh_datasets()
+        self.browse_tab.refresh_datasets()
         self._apply_tab_size(self.tabWidget.currentIndex())
+
+    def _position_near_top_left(self):
+        """Anchor the window near the screen's top-left every time the
+        plugin is (re)opened, instead of wherever Qt/the window manager
+        last left it. The dialog starts small (API Key tab) but grows a
+        lot switching to Search/Browse (up to ~1140x834) — _apply_tab_size
+        clamps the position so a resize never pushes it off-screen, but
+        clamping only kicks in *after* the window has already grown from
+        wherever it happened to open; starting near the top-left instead
+        gives it room to grow toward the bottom-right on the first tab
+        switch too, so nothing needs to be clamped/shifted into view.
+        """
+        try:
+            avail = self.screen().availableGeometry()
+        except Exception:
+            app_screen = QtWidgets.QApplication.primaryScreen()
+            avail = app_screen.availableGeometry() if app_screen is not None else None
+        if avail is None:
+            return
+        margin = 100
+        self.move(avail.left() + margin, avail.top() + margin)
 
     def _reset_aoi_tool_if_active(self):
         """If the AOI rectangle tool is still the active canvas tool when
