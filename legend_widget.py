@@ -27,7 +27,7 @@ _MARGIN = 10
 _BAR_HEIGHT = 14
 _TICK_HEIGHT = 4
 _TICK_FRACTIONS = (0.0, 0.25, 0.5, 0.75, 1.0)
-_TICK_LABEL_WIDTH = 70
+_TICK_LABEL_PADDING = 6
 
 # Approximate RGB stops for the palette names actually used across
 # arco_snapshot.yaml (checked against the installed geobridge: viridis and
@@ -126,6 +126,16 @@ class VariableLegendWidget(QWidget):
         tick_pen = QPen(self.palette().mid().color())
         text_pen = QPen(self.palette().text().color())
         label_top = bar_rect.bottom() + _TICK_HEIGHT + 2
+
+        # Size each label box from its *actual* rendered text width rather
+        # than a flat guessed pixel width - the default system font (and
+        # therefore how wide "302.5" actually renders) differs enough
+        # between platforms that a fixed-width box sized for one font
+        # started overlapping its neighbours under a wider one (confirmed:
+        # fine on Windows, overlapping on Linux, same code and same
+        # numbers). QFontMetrics reports the real width for whatever font
+        # this widget is actually using, on any platform.
+        metrics = painter.fontMetrics()
         for frac in _TICK_FRACTIONS:
             x = bar_rect.left() + frac * bar_rect.width()
             painter.setPen(tick_pen)
@@ -136,15 +146,16 @@ class VariableLegendWidget(QWidget):
 
             value = vmin + frac * (vmax - vmin)
             label = f"{value:.3g}"
+            label_width = metrics.horizontalAdvance(label) + _TICK_LABEL_PADDING
             painter.setPen(text_pen)
             if frac <= 0.0:
-                label_rect = QRectF(x, label_top, _TICK_LABEL_WIDTH, 16)
+                label_rect = QRectF(x, label_top, label_width, 16)
                 align = Qt.AlignmentFlag.AlignLeft
             elif frac >= 1.0:
-                label_rect = QRectF(x - _TICK_LABEL_WIDTH, label_top, _TICK_LABEL_WIDTH, 16)
+                label_rect = QRectF(x - label_width, label_top, label_width, 16)
                 align = Qt.AlignmentFlag.AlignRight
             else:
-                label_rect = QRectF(x - _TICK_LABEL_WIDTH / 2, label_top, _TICK_LABEL_WIDTH, 16)
+                label_rect = QRectF(x - label_width / 2, label_top, label_width, 16)
                 align = Qt.AlignmentFlag.AlignHCenter
             painter.drawText(label_rect, align, label)
 
