@@ -407,6 +407,8 @@
       </property>
       <property name="text"><string></string></property>
       <property name="wordWrap"><bool>true</bool></property>
+      <property name="openExternalLinks"><bool>true</bool></property>
+      <property name="textInteractionFlags"><set>Qt::TextBrowserInteraction</set></property>
      </widget>
 
      <widget class="QProgressBar" name="progress_export">
