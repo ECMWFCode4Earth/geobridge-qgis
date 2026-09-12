@@ -532,6 +532,28 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
             _w = getattr(self, _name)
             _w.move(_w.x(), _w.y() + _SEARCH_LAYOUT_SHIFT)
 
+        # lbl_search_selection's .ui height (48px) assumed at most two
+        # lines total ("Selected: <title>" and "variable ..."), which held
+        # for short dataset titles — but a longer one (e.g. CERRA's full
+        # title) wraps to two lines by itself, needing three lines total,
+        # and the variable/"Dataset details" line was getting clipped by
+        # groupBox_aoi's header sitting right below it (confirmed in a
+        # Linux screenshot). Budget for that from real font metrics and
+        # push the left column (groupBox_aoi, groupBox_time_range) down to
+        # match — groupBox_export is the independent right column (see
+        # its x=570 vs these two's x=10 in the .ui) and is unaffected.
+        _sel_metrics = QFontMetrics(self.lbl_search_selection.font())
+        _sel_target_h = 3 * _sel_metrics.height() + 6
+        self._search_selection_extra = max(0, _sel_target_h - self.lbl_search_selection.height())
+        if self._search_selection_extra:
+            self.lbl_search_selection.resize(
+                self.lbl_search_selection.width(),
+                self.lbl_search_selection.height() + self._search_selection_extra,
+            )
+            for _name in ("groupBox_aoi", "groupBox_time_range"):
+                _w = getattr(self, _name)
+                _w.move(_w.x(), _w.y() + self._search_selection_extra)
+
         # lbl_aoi_bbox's .ui height (24px) only fits one line — fine for
         # "No area selected yet.", but "Drawn on map — West: ... South:
         # ... East: ... North: ..." wraps to two lines, and the second one
@@ -539,8 +561,9 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
         # screenshot; on this tab groupBox_aoi uses absolute positioning,
         # not a layout, so nothing here grows on its own the way a real
         # layout would). Give it real two-line room and push everything
-        # below it in groupBox_aoi, plus every group box further down the
-        # tab, down by the same amount.
+        # below it in groupBox_aoi, plus groupBox_time_range further down
+        # the left column, down by the same amount — groupBox_export
+        # (right column, independent, see above) is unaffected.
         _bbox_metrics = QFontMetrics(self.lbl_aoi_bbox.font())
         _bbox_target_h = 2 * _bbox_metrics.height() + 6
         self._aoi_bbox_extra = max(0, _bbox_target_h - self.lbl_aoi_bbox.height())
@@ -548,9 +571,9 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
             self.lbl_aoi_bbox.resize(self.lbl_aoi_bbox.width(), self.lbl_aoi_bbox.height() + self._aoi_bbox_extra)
             self.lbl_aoi_warning.move(self.lbl_aoi_warning.x(), self.lbl_aoi_warning.y() + self._aoi_bbox_extra)
             self.groupBox_aoi.resize(self.groupBox_aoi.width(), self.groupBox_aoi.height() + self._aoi_bbox_extra)
-            for _name in ("groupBox_time_range", "groupBox_export"):
-                _w = getattr(self, _name)
-                _w.move(_w.x(), _w.y() + self._aoi_bbox_extra)
+            self.groupBox_time_range.move(
+                self.groupBox_time_range.x(), self.groupBox_time_range.y() + self._aoi_bbox_extra
+            )
 
         # Legend for the WMTS preview's color scale — right column, upper
         # part (above Export to GeoTIFF, which starts at y=120 in the .ui,
@@ -684,12 +707,15 @@ class GeoBridgePluginDialog(QtWidgets.QDialog, FORM_CLASS):
             # button at the bottom of groupBox_time_range. The extra +40 on
             # top of that is just breathing room so the play button/slider
             # row isn't sitting flush against the window's bottom edge.
-            # + self._aoi_bbox_extra: groupBox_time_range/export get pushed
-            # down further still when the AOI bbox label needs two lines
-            # (see the lbl_aoi_bbox fix above) — without adding it here too,
-            # that push could shove the play button/slider row below this
-            # fixed window's bottom edge.
-            self.tab_search: QSize(1140, 760 + 34 + 40 + self._aoi_bbox_extra),
+            # + self._search_selection_extra + self._aoi_bbox_extra: the
+            # left column (groupBox_aoi, groupBox_time_range) gets pushed
+            # down further still when the dataset title or the AOI bbox
+            # label need extra lines (see those two fixes above) — without
+            # adding that here too, the push could shove the play button/
+            # slider row below this fixed window's bottom edge.
+            self.tab_search: QSize(
+                1140, 760 + 34 + 40 + self._search_selection_extra + self._aoi_bbox_extra
+            ),
             # Matches the size the user had it resized to by hand (measured
             # live via the window's client-area rect: 791x928).
             self.tab_timeseries: QSize(791, 928),
