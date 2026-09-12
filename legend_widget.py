@@ -79,7 +79,7 @@ class VariableLegendWidget(QWidget):
         super().__init__(parent)
         self._style = {}
         self._variable_label = ""
-        self.setFixedHeight(64)
+        self.setFixedHeight(72)
 
     def set_style(self, style: dict, variable_label: str = ""):
         self._style = style or {}
@@ -147,15 +147,20 @@ class VariableLegendWidget(QWidget):
             value = vmin + frac * (vmax - vmin)
             label = f"{value:.3g}"
             label_width = metrics.horizontalAdvance(label) + _TICK_LABEL_PADDING
+            # Same principle as label_width above: a hardcoded height (was a
+            # flat 16px) clipped the bottom of the digits under Linux's
+            # taller default font, even though the width fix already
+            # accounted for the same font difference horizontally.
+            label_height = metrics.height()
             painter.setPen(text_pen)
             if frac <= 0.0:
-                label_rect = QRectF(x, label_top, label_width, 16)
+                label_rect = QRectF(x, label_top, label_width, label_height)
                 align = Qt.AlignmentFlag.AlignLeft
             elif frac >= 1.0:
-                label_rect = QRectF(x - label_width, label_top, label_width, 16)
+                label_rect = QRectF(x - label_width, label_top, label_width, label_height)
                 align = Qt.AlignmentFlag.AlignRight
             else:
-                label_rect = QRectF(x - label_width / 2, label_top, label_width, 16)
+                label_rect = QRectF(x - label_width / 2, label_top, label_width, label_height)
                 align = Qt.AlignmentFlag.AlignHCenter
             painter.drawText(label_rect, align, label)
 
