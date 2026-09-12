@@ -166,3 +166,47 @@ Authentication is only required for downloads and full-history time series
    :width: 500px
 
    The API Key tab once ``geobridge`` is installed and a key is saved.
+
+Troubleshooting
+----------------
+
+"Export failed: Variable '<name>' not found in Zarr store ... Available: None"
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+You'll see this on the Search tab's "Export to GeoTIFF" or the Time
+Series tab, worded roughly like:
+
+    Export failed: Variable 't2m' not found in Zarr store (Array t2m
+    does not exist). Available: None — an empty list here usually means
+    your QGIS/GDAL version is too old to read this store's format (this
+    dataset may need Zarr V3 support, added in GDAL 3.9 / roughly QGIS
+    3.38+); try upgrading QGIS.
+
+An empty ``Available:`` list is the tell — GDAL opened the store's
+connection fine but couldn't enumerate anything inside it at all, which
+in practice has meant an older bundled GDAL that doesn't understand
+this store's newer **Zarr V3** metadata yet. Nothing is wrong with the
+dataset, your request, or this plugin — the fix is updating QGIS (which
+brings a newer GDAL with it):
+
+* **Windows/macOS:** install a recent QGIS — roughly **3.38+** bundles
+  GDAL 3.9+. See the Requirements note above for how to check the
+  exact GDAL version from QGIS's own Python Console.
+* **Linux:** the QGIS version number alone isn't reliable evidence of
+  the GDAL version underneath it — see
+  `Installing QGIS on Linux (Ubuntu) with a matching GDAL version`_
+  above, in particular **Step 6**, which is the same check to run here.
+
+This only affects the handful of datasets stored in Zarr V3 — search,
+WMTS preview, Browse by Variable, and CDS downloads all work regardless
+of GDAL version.
+
+Only part of an error message is visible
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The on-screen status line after a failed export/download is a small,
+fixed-size box, so a long error can run past what it can show. The
+full error — including a full stack trace — is always written to
+**View → Panels → Log Messages**, under the **GeoBridge** tab, which is
+worth checking any time an error looks cut off or you need the exact
+detail to report an issue.
